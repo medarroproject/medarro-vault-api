@@ -74,6 +74,20 @@ class SearchVaultResponse(BaseModel):
     results: List[VaultSearchResult]
 
 
+# NEW: Gemini AI Models
+class AiQueryRequest(BaseModel):
+    query: str
+    user_id: str
+    mode: str = "explanation"
+    track: str = "NEET"
+
+
+class AiQueryResponse(BaseModel):
+    answer: str
+    sources: List[str]
+    confidence: float
+
+
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
@@ -268,3 +282,85 @@ async def search_vault(request: SearchVaultRequest):
     ]
 
     return SearchVaultResponse(results=results)
+
+
+# ---------------------------------------------------------------------------
+# NEW: GEMINI AI ENDPOINT - For Bubble Integration
+# ---------------------------------------------------------------------------
+
+@app.post("/search", response_model=AiQueryResponse)
+async def gemini_ai_search(request: AiQueryRequest):
+    """
+    Process AI query using Gemini API.
+    Query format: medical question about NEET/MBBS topics.
+    Returns: AI-generated answer with sources and confidence.
+    """
+    import google.generativeai as genai
+    
+    # Configure Gemini
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    if not gemini_key:
+        raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
+    
+    genai.configure(api_key=gemini_key)
+    model = genai.GenerativeModel("gemini-1.5-flash")
+    
+    # Build prompt based on mode
+    mode_prompts = {
+        "explanation": "Explain in simple terms for a student learning this topic",
+        "exam": "Answer as if for an exam, be concise and accurate",
+        "revision": "Provide key points for quick revision",
+        "notes": "Format as study notes with bullet points"
+    }
+    
+    mode_instruction = mode_prompts.get(request.mode, mode_prompts["explanation"])
+    
+    # Construct medical-focused prompt
+    prompt = f"""You are an expert medical educator for Indian medical students ({request.track} track).
+
+Student Question: {request.query}
+
+Mode: {mode_instruction}
+
+Important:
+- Ground your answer in standard medical textbooks (Gray's Anatomy, Guyton, Robbins, KD Tripathi, BD Chaurasia, SRB)
+- Include relevant Indian medical curriculum references
+- Be accurate for medical exams
+- Use medical terminology appropriately
+- If you're not sure, say so
+
+Provide a clear, accurate medical answer."""
+
+    try:
+        response = model.generate_content(prompt)
+        
+        if not response.text:
+            raise HTTPException(status_code=500, detail="Gemini returned empty response")
+        
+        # Extract sources from response (basic extraction)
+        sources = []
+        if "gray" in response.text.lower():
+            sources.append("Gray's Anatomy")
+        if "guyton" in response.text.lower():
+            sources.append("Guyton")
+        if "robbins" in response.text.lower():
+            sources.append("Robbins")
+        if "tripathi" in response.text.lower():
+            sources.append("KD Tripathi")
+        if "ncert" in response.text.lower():
+            sources.append("NCERT")
+        
+        if not sources:
+            sources = ["Medical References"]
+        
+        return AiQueryResponse(
+            answer=response.text,
+            sources=sources,
+            confidence=0.95
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error calling Gemini API: {str(e)}"
+        )

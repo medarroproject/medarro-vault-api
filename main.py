@@ -555,7 +555,7 @@ async def gemini_query(request: QueryRequest):
     )
     
     try:
-        model = genai.GenerativeModel("gemini-pro")
+        model = genai.GenerativeModel("gemini-1.5-flash")
         response = model.generate_content(
             prompt,
             generation_config={
@@ -629,7 +629,7 @@ async def gemini_query_stream(request: QueryRequest):
     
     async def generate():
         try:
-            model = genai.GenerativeModel("gemini-pro")
+            model = genai.GenerativeModel("gemini-1.5-flash")
             response = model.generate_content(
                 prompt,
                 stream=True,

@@ -375,7 +375,7 @@ async def health_check():
     # Test Gemini Embeddings API
     try:
         test_embedding = genai.embed_content(
-           model="models/gemini-embedding-001"
+           model="models/gemini-embedding-001",
             content="test",
             task_type="retrieval_document"
         )

@@ -2,6 +2,7 @@ import os
 import io
 import asyncio
 from typing import List
+import hashlib
 
 import fitz  # PyMuPDF
 import httpx
@@ -18,12 +19,17 @@ load_dotenv()
 # Clients
 # ---------------------------------------------------------------------------
 
-# Gemini Configuration
+# Gemini Configuration - Using correct available models
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY environment variable is required")
+    raise ValueError("❌ GEMINI_API_KEY environment variable is required")
 
-genai.configure(api_key=GEMINI_API_KEY)
+try:
+    genai.configure(api_key=GEMINI_API_KEY)
+    print("✅ Gemini API configured successfully")
+except Exception as e:
+    print(f"❌ Gemini configuration error: {e}")
+    raise
 
 supabase: Client = create_client(
     os.getenv("SUPABASE_URL"),
@@ -82,9 +88,9 @@ class SearchVaultResponse(BaseModel):
 # Gemini AI Models
 class AiQueryRequest(BaseModel):
     query: str
-    user_id: str = None  # Optional
-    mode: str = "explanation"  # explanation, exam, revision, notes, deep-dive
-    track: str = "NEET"  # NEET, MBBS, BHMS, BDS
+    user_id: str = None
+    mode: str = "explanation"
+    track: str = "NEET"
 
 
 class AiQueryResponse(BaseModel):
@@ -108,28 +114,24 @@ OVERLAP_WORDS = 100
 
 
 def extract_pages(pdf_bytes: bytes) -> List[dict]:
-    """
-    Extract text from each page of a PDF.
-    Returns a list of dicts: {"page_number": int, "text": str}
-    """
+    """Extract text from each page of a PDF."""
     pages = []
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    for page_index in range(len(doc)):
-        page = doc[page_index]
-        text = page.get_text("text")
-        if text.strip():
-            pages.append({"page_number": page_index + 1, "text": text})
-    doc.close()
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        for page_index in range(len(doc)):
+            page = doc[page_index]
+            text = page.get_text("text")
+            if text.strip():
+                pages.append({"page_number": page_index + 1, "text": text})
+        doc.close()
+    except Exception as e:
+        print(f"❌ PDF extraction error: {e}")
+        raise
     return pages
 
 
 def split_into_chunks(pages: List[dict]) -> List[dict]:
-    """
-    Slide a window of CHUNK_WORDS words over the full document text,
-    advancing by (CHUNK_WORDS - OVERLAP_WORDS) words each step.
-    Each chunk records the page_number where its first word originates.
-    Returns a list of dicts: {"chunk_text": str, "page_number": int}
-    """
+    """Split pages into overlapping word chunks."""
     word_page_pairs = []
     for page in pages:
         words = page["text"].split()
@@ -158,8 +160,8 @@ def split_into_chunks(pages: List[dict]) -> List[dict]:
 
 def get_embedding_gemini(text: str) -> List[float]:
     """
-    Generate an embedding for text using Gemini Embedding API.
-    FALLBACK: If quota exceeded or API disabled, use Supabase pgvector's built-in embeddings.
+    Generate embedding using Gemini API.
+    Falls back to hash-based if API fails.
     """
     try:
         response = genai.embed_content(
@@ -168,40 +170,27 @@ def get_embedding_gemini(text: str) -> List[float]:
             task_type="retrieval_document"
         )
         if response and "embedding" in response:
+            print(f"✅ Embedding generated (length: {len(response['embedding'])})")
             return response["embedding"]
     except Exception as e:
-        # Log the error
         error_msg = str(e)
         print(f"⚠️ Gemini Embedding API error: {error_msg}")
         
-        # Check if it's a quota/permission error
-        if any(keyword in error_msg.lower() for keyword in ["quota", "permission", "disabled", "not enabled", "429", "403"]):
-            print("📌 Falling back to Supabase vector storage (embedding-001 disabled)")
-            # Use empty vector - Supabase will compute similarity differently
-            # This allows PDF upload to continue without breaking
+        if any(keyword in error_msg.lower() for keyword in ["quota", "permission", "disabled", "not enabled", "429", "403", "resource exhausted"]):
+            print("📌 Using fallback hash-based embedding")
             return get_embedding_fallback(text)
         
         raise HTTPException(
             status_code=503,
-            detail=f"Embedding service temporarily unavailable. Please try again later. Error: {error_msg[:100]}"
+            detail=f"Embedding service error: {error_msg[:100]}"
         )
 
 
 def get_embedding_fallback(text: str) -> List[float]:
-    """
-    FALLBACK EMBEDDING: Simple hash-based embedding when Gemini API is unavailable.
-    This is NOT production-grade but keeps the system operational.
-    
-    Better option: Use Supabase's built-in full-text search instead of vector search.
-    """
-    import hashlib
-    
-    # Create a deterministic vector from text hash
-    # This maintains consistency but doesn't do semantic similarity
+    """Fallback hash-based embedding when API fails."""
     hash_obj = hashlib.sha256(text.encode())
     hash_bytes = hash_obj.digest()
     
-    # Convert hash to 1536-dimensional vector (same as OpenAI ada-002)
     embedding = []
     for i in range(1536):
         embedding.append(float(hash_bytes[i % 32]) / 256.0)
@@ -210,24 +199,19 @@ def get_embedding_fallback(text: str) -> List[float]:
 
 
 async def download_pdf(url: str) -> bytes:
-    """
-    Asynchronously download a PDF from a public URL.
-    """
+    """Asynchronously download PDF from URL."""
     async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
         response = await client.get(url)
         if response.status_code != 200:
             raise HTTPException(
                 status_code=400,
-                detail=f"Failed to download PDF. HTTP {response.status_code} from {url}",
+                detail=f"Failed to download PDF. HTTP {response.status_code}",
             )
-        content_type = response.headers.get("content-type", "")
-        if "pdf" not in content_type and not url.lower().endswith(".pdf"):
-            pass
         return response.content
 
 
 # ---------------------------------------------------------------------------
-# MEDICAL BOOK REFERENCES & PROMPTS
+# MEDICAL BOOK REFERENCES
 # ---------------------------------------------------------------------------
 
 MEDICAL_BOOKS = {
@@ -297,13 +281,10 @@ MODE_INSTRUCTIONS = {
 
 
 def build_medical_prompt(query: str, mode: str = "explanation", track: str = "NEET") -> str:
-    """
-    Build a medical-specific prompt for Gemini that enforces book accuracy.
-    """
+    """Build medical-specific prompt for Gemini."""
     
     mode_instruction = MODE_INSTRUCTIONS.get(mode, MODE_INSTRUCTIONS["explanation"])
     
-    # Select relevant books based on track
     if track == "NEET":
         relevant_books = MEDICAL_BOOKS["NEET"]
     elif track == "MBBS":
@@ -321,9 +302,9 @@ def build_medical_prompt(query: str, mode: str = "explanation", track: str = "NE
 
 STRICT GUIDELINES:
 1. ONLY answer based on standard medical textbooks and established medical knowledge
-2. Reference specific textbooks when relevant (e.g., "According to Gray's Anatomy..." or "As per BD Chaurasia...")
+2. Reference specific textbooks when relevant
 3. Use EXACT medical terminology - no approximations
-4. If answering is uncertain, clearly state: "This topic is not covered in standard {track} curriculum"
+4. If uncertain, clearly state: "This topic is not covered in standard {track} curriculum"
 5. Prioritize ICMR, WHO, and Indian medical standards where applicable
 6. For drugs: include generic name, class, mechanism, important side effects
 7. For anatomy: describe structures, relations, nerve/blood supply accurately
@@ -356,16 +337,12 @@ Now provide the accurate medical answer:"""
 
 
 # ---------------------------------------------------------------------------
-# Endpoints - PDF Upload & Search (Vault Features)
+# Endpoints - Health Check
 # ---------------------------------------------------------------------------
 
 @app.get("/health")
 async def health_check():
-    """
-    Health check endpoint.
-    Monitors: Gemini API, Embedding API, Supabase connection.
-    Returns degraded status if embedding API is disabled.
-    """
+    """Health check endpoint - tests all APIs."""
     health_status = {
         "status": "ok",
         "service": "Medarro API",
@@ -381,13 +358,18 @@ async def health_check():
     # Test Gemini Query API
     try:
         model = genai.GenerativeModel("gemini-pro")
-        response = model.generate_content("test", generation_config={"max_output_tokens": 10})
-        if not response.text:
+        response = model.generate_content(
+            "test",
+            generation_config={"max_output_tokens": 10}
+        )
+        if response.text:
+            health_status["apis"]["gemini_query"] = "ok"
+        else:
             health_status["apis"]["gemini_query"] = "degraded"
             health_status["warnings"].append("Gemini Query API responding but producing empty responses")
     except Exception as e:
         health_status["apis"]["gemini_query"] = "down"
-        health_status["warnings"].append(f"Gemini Query API error: {str(e)[:50]}")
+        health_status["warnings"].append(f"Gemini Query API error: {str(e)[:80]}")
         health_status["status"] = "degraded"
     
     # Test Gemini Embeddings API
@@ -405,12 +387,13 @@ async def health_check():
     except Exception as e:
         error_str = str(e).lower()
         health_status["apis"]["gemini_embeddings"] = "disabled"
-        health_status["warnings"].append(
-            f"⚠️ CRITICAL: Gemini Embeddings API disabled or quota exceeded. Fallback to full-text search enabled. Error: {str(e)[:60]}"
-        )
-        # System can still function with fallback
-        if "quota" not in error_str and "permission" not in error_str and "disabled" not in error_str:
-            health_status["status"] = "degraded"
+        
+        if any(keyword in error_str for keyword in ["quota", "resource exhausted"]):
+            health_status["warnings"].append("⚠️ QUOTA EXCEEDED - Fallback to full-text search enabled")
+        elif any(keyword in error_str for keyword in ["permission", "disabled", "not enabled", "403"]):
+            health_status["warnings"].append("⚠️ API DISABLED - Enable in Google Cloud Console")
+        else:
+            health_status["warnings"].append(f"Embedding API error: {str(e)[:80]}")
     
     # Test Supabase
     try:
@@ -418,19 +401,20 @@ async def health_check():
         health_status["apis"]["supabase"] = "ok"
     except Exception as e:
         health_status["apis"]["supabase"] = "down"
-        health_status["warnings"].append(f"Supabase connection error: {str(e)[:50]}")
+        health_status["warnings"].append(f"Supabase error: {str(e)[:80]}")
         health_status["status"] = "degraded"
     
     return health_status
 
 
+# ---------------------------------------------------------------------------
+# Endpoints - PDF Upload & Search
+# ---------------------------------------------------------------------------
+
 @app.post("/upload-pdf", response_model=UploadPDFResponse)
 async def upload_pdf(request: UploadPDFRequest):
-    """
-    Download a PDF from a public URL, extract text, chunk it,
-    embed each chunk with Gemini embeddings, and store in Supabase.
-    """
-    # 1. Download PDF
+    """Download PDF, extract text, chunk, embed, and store in Supabase."""
+    
     try:
         pdf_bytes = await download_pdf(request.pdf_url)
     except HTTPException:
@@ -438,21 +422,18 @@ async def upload_pdf(request: UploadPDFRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error downloading PDF: {str(e)}")
 
-    # 2. Extract text page by page
     try:
         pages = extract_pages(pdf_bytes)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Error extracting PDF text: {str(e)}")
 
     if not pages:
-        raise HTTPException(status_code=422, detail="PDF appears to contain no extractable text.")
+        raise HTTPException(status_code=422, detail="PDF appears to contain no extractable text")
 
-    # 3. Split into overlapping chunks
     chunks = split_into_chunks(pages)
     if not chunks:
-        raise HTTPException(status_code=422, detail="No text chunks could be generated from this PDF.")
+        raise HTTPException(status_code=422, detail="No text chunks could be generated from this PDF")
 
-    # 4. Embed each chunk with Gemini and insert into Supabase
     inserted_count = 0
     try:
         for chunk in chunks:
@@ -471,27 +452,22 @@ async def upload_pdf(request: UploadPDFRequest):
             if not result.data:
                 raise HTTPException(
                     status_code=500,
-                    detail="Supabase insert returned no data. Check RLS policies.",
+                    detail="Supabase insert failed. Check RLS policies.",
                 )
             inserted_count += 1
 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error during embedding/storage: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error during storage: {str(e)}")
 
     return UploadPDFResponse(status="ready", chunks_count=inserted_count)
 
 
 @app.post("/search-vault", response_model=SearchVaultResponse)
 async def search_vault(request: SearchVaultRequest):
-    """
-    Embed a user query with Gemini and run cosine similarity search
-    against stored vault chunks via Supabase RPC.
+    """Search vault with fallback to full-text search."""
     
-    FALLBACK: If vector search fails (quota/API disabled), fall back to full-text search.
-    """
-    # 1. Try to embed the query with Gemini
     query_embedding = None
     embedding_failed = False
     
@@ -501,7 +477,7 @@ async def search_vault(request: SearchVaultRequest):
         print(f"⚠️ Vector embedding failed: {str(e)}")
         embedding_failed = True
 
-    # 2. Try vector search if embedding succeeded
+    # Try vector search first
     if query_embedding and not embedding_failed:
         try:
             rpc_response = supabase.rpc(
@@ -528,10 +504,9 @@ async def search_vault(request: SearchVaultRequest):
             print(f"⚠️ Vector search RPC failed: {str(e)}")
             embedding_failed = True
 
-    # 3. FALLBACK: Use full-text search if vector search fails
+    # FALLBACK: Full-text search
     print("📌 Falling back to full-text search")
     try:
-        # Use Supabase full-text search
         response = supabase.table("personal_vault") \
             .select("chunk_text, pdf_name, page_number") \
             .eq("user_id", request.user_id) \
@@ -540,40 +515,35 @@ async def search_vault(request: SearchVaultRequest):
             .execute()
         
         if response.data:
-            # Convert full-text results to same format
             results = [
                 VaultSearchResult(
                     chunk_text=row["chunk_text"],
                     pdf_name=row["pdf_name"],
                     page_number=row["page_number"],
-                    similarity=0.85,  # Default confidence for FTS
+                    similarity=0.85,
                 )
                 for row in response.data
             ]
             return SearchVaultResponse(results=results)
         else:
-            # No results found even with full-text search
             return SearchVaultResponse(results=[])
             
     except Exception as e:
         print(f"❌ Full-text search also failed: {str(e)}")
         raise HTTPException(
             status_code=503,
-            detail=f"Search service temporarily unavailable. Error: {str(e)[:100]}"
+            detail=f"Search service temporarily unavailable: {str(e)[:100]}"
         )
 
 
 # ---------------------------------------------------------------------------
-# AI Endpoints - Gemini Medical Q&A
+# Endpoints - Gemini Medical Q&A
 # ---------------------------------------------------------------------------
 
 @app.post("/query", response_model=AiQueryResponse)
 async def gemini_query(request: QueryRequest):
-    """
-    Main endpoint for medical queries using Gemini.
-    Provides book-accurate, curriculum-aligned answers.
-    """
-    # Build medical-specific prompt
+    """Main medical query endpoint using Gemini."""
+    
     prompt = build_medical_prompt(
         query=request.query,
         mode=request.mode,
@@ -581,12 +551,11 @@ async def gemini_query(request: QueryRequest):
     )
     
     try:
-        # Use Gemini Pro model
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-pro")
         response = model.generate_content(
             prompt,
             generation_config={
-                "temperature": 0.7,  # Balanced: accurate but natural
+                "temperature": 0.7,
                 "top_p": 0.9,
                 "max_output_tokens": 2000,
             }
@@ -595,7 +564,7 @@ async def gemini_query(request: QueryRequest):
         if not response.text:
             raise HTTPException(status_code=500, detail="Gemini returned empty response")
         
-        # Extract mentioned textbooks from response
+        # Extract mentioned textbooks
         sources = []
         book_keywords = {
             "Gray": "Gray's Anatomy",
@@ -617,7 +586,6 @@ async def gemini_query(request: QueryRequest):
         if not sources:
             sources = ["Standard Medical References"]
         
-        # Remove duplicates while preserving order
         sources = list(dict.fromkeys(sources))
         
         return AiQueryResponse(
@@ -635,9 +603,7 @@ async def gemini_query(request: QueryRequest):
 
 @app.post("/search")
 async def gemini_ai_search(request: AiQueryRequest):
-    """
-    Alias for /query endpoint for backward compatibility.
-    """
+    """Backward compatibility endpoint for /query."""
     query_req = QueryRequest(
         query=request.query,
         mode=request.mode,
@@ -648,10 +614,7 @@ async def gemini_ai_search(request: AiQueryRequest):
 
 @app.post("/query-stream")
 async def gemini_query_stream(request: QueryRequest):
-    """
-    Streaming endpoint for long-form answers.
-    Better UX for detailed explanations.
-    """
+    """Streaming endpoint for long-form answers."""
     from fastapi.responses import StreamingResponse
     
     prompt = build_medical_prompt(
@@ -662,7 +625,7 @@ async def gemini_query_stream(request: QueryRequest):
     
     async def generate():
         try:
-            model = genai.GenerativeModel("gemini-1.5-flash")
+            model = genai.GenerativeModel("gemini-pro")
             response = model.generate_content(
                 prompt,
                 stream=True,
@@ -684,12 +647,12 @@ async def gemini_query_stream(request: QueryRequest):
 
 
 # ---------------------------------------------------------------------------
-# Additional utility endpoints
+# Utility Endpoints
 # ---------------------------------------------------------------------------
 
 @app.get("/tracks")
 async def get_tracks():
-    """Get available medical tracks"""
+    """Get available medical tracks and modes."""
     return {
         "tracks": ["NEET", "MBBS", "BHMS", "BDS", "MD/MS"],
         "modes": ["explanation", "exam", "revision", "notes", "deep-dive"]
@@ -698,42 +661,36 @@ async def get_tracks():
 
 @app.get("/books")
 async def get_books():
-    """Get recommended medical textbooks"""
+    """Get recommended medical textbooks."""
     return MEDICAL_BOOKS
 
 
 @app.get("/status")
 async def api_status():
-    """
-    Quick status check for Bubble.
-    Returns which APIs are operational and which are in fallback mode.
-    
-    Bubble should check this before making search requests.
-    """
+    """Check API status and fallback mode."""
     status = {
-        "timestamp": str(asyncio.get_event_loop().time()),
         "vector_search_available": True,
         "full_text_search_fallback": False,
         "gemini_query_api": "ok",
         "recommendations": []
     }
     
-    # Quick test of embedding API
     try:
         genai.embed_content(
             model="models/embedding-001",
-            content="quick test",
+            content="test",
             task_type="retrieval_document"
         )
         status["vector_search_available"] = True
     except Exception as e:
-        if any(keyword in str(e).lower() for keyword in ["quota", "permission", "disabled", "not enabled", "403", "429"]):
+        error_str = str(e).lower()
+        if any(keyword in error_str for keyword in ["quota", "resource exhausted", "permission", "disabled", "403", "429"]):
             status["vector_search_available"] = False
             status["full_text_search_fallback"] = True
             status["recommendations"].append("⚠️ Vector search disabled - using full-text search fallback")
-            status["recommendations"].append("Contact admin: Gemini Embeddings API needs to be enabled")
+            status["recommendations"].append("Check: /health endpoint for details")
         else:
-            status["recommendations"].append(f"Embedding service error: {str(e)[:50]}")
+            status["recommendations"].append(f"Embedding service error: {str(e)[:80]}")
     
     return status
 

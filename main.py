@@ -362,7 +362,11 @@ async def health_check():
             "test",
             generation_config={"max_output_tokens": 10}
         )
-        if response.text:
+        try:
+            response_text = response.text
+        except Exception:
+            response_text = None
+        if response and response_text:
             health_status["apis"]["gemini_query"] = "ok"
         else:
             health_status["apis"]["gemini_query"] = "degraded"

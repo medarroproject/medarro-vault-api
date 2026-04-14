@@ -357,7 +357,7 @@ async def health_check():
     
     # Test Gemini Query API
     try:
-        model = genai.GenerativeModel("gemini-pro")
+        genai.GenerativeModel("models/gemini-2.5-flash")
         response = model.generate_content(
             "test",
             generation_config={"max_output_tokens": 10}
@@ -375,7 +375,7 @@ async def health_check():
     # Test Gemini Embeddings API
     try:
         test_embedding = genai.embed_content(
-            model="models/embedding-001",
+           model="models/gemini-embedding-001"
             content="test",
             task_type="retrieval_document"
         )

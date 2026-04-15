@@ -342,7 +342,6 @@ Now provide the accurate medical answer:"""
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint - tests all APIs."""
     health_status = {
         "status": "ok",
         "service": "Medarro API",
@@ -354,78 +353,43 @@ async def health_check():
         },
         "warnings": []
     }
-    
-   # Test Gemini Query API
-try:
-    model = genai.GenerativeModel("models/gemini-2.5-flash")
 
-    response = model.generate_content(
-        contents=[
-            {
-                "role": "user",
-                "parts": [{"text": "Say OK"}]
-            }
-        ]
-    )
-
-    response_text = None
-
-    # Primary extraction
+    # ✅ GEMINI QUERY TEST
     try:
-        response_text = response.text
-    except:
+        model = genai.GenerativeModel("models/gemini-2.5-flash")
+
+        response = model.generate_content(
+            contents=[
+                {
+                    "role": "user",
+                    "parts": [{"text": "Say OK"}]
+                }
+            ]
+        )
+
         response_text = None
 
-    # 🔥 FALLBACK (VERY IMPORTANT)
-    if not response_text and hasattr(response, "candidates"):
         try:
-            response_text = response.candidates[0].content.parts[0].text
+            response_text = response.text
         except:
             response_text = None
 
-    # Final check
-    if response_text and response_text.strip() != "":
-        health_status["apis"]["gemini_query"] = "ok"
-    else:
-        health_status["apis"]["gemini_query"] = "degraded"
-        health_status["warnings"].append("Gemini returned empty response")
+        if not response_text and hasattr(response, "candidates"):
+            try:
+                response_text = response.candidates[0].content.parts[0].text
+            except:
+                response_text = None
 
-except Exception as e:
-    health_status["apis"]["gemini_query"] = "down"
-    health_status["warnings"].append(f"Gemini Query API error: {str(e)[:80]}")
-    
-    # Test Gemini Embeddings API
-    try:
-        test_embedding = genai.embed_content(
-           model="models/gemini-embedding-001",
-            content="test",
-            task_type="retrieval_document"
-        )
-        if test_embedding and "embedding" in test_embedding:
-            health_status["apis"]["gemini_embeddings"] = "ok"
+        if response_text and len(response_text.strip()) > 0:
+            health_status["apis"]["gemini_query"] = "ok"
         else:
-            health_status["apis"]["gemini_embeddings"] = "degraded"
-            health_status["warnings"].append("Embedding API returning invalid response")
+            health_status["apis"]["gemini_query"] = "degraded"
+            health_status["warnings"].append("Gemini returned empty response")
+
     except Exception as e:
-        error_str = str(e).lower()
-        health_status["apis"]["gemini_embeddings"] = "disabled"
-        
-        if any(keyword in error_str for keyword in ["quota", "resource exhausted"]):
-            health_status["warnings"].append("⚠️ QUOTA EXCEEDED - Fallback to full-text search enabled")
-        elif any(keyword in error_str for keyword in ["permission", "disabled", "not enabled", "403"]):
-            health_status["warnings"].append("⚠️ API DISABLED - Enable in Google Cloud Console")
-        else:
-            health_status["warnings"].append(f"Embedding API error: {str(e)[:80]}")
-    
-    # Test Supabase
-    try:
-        result = supabase.table("personal_vault").select("*", count="exact").limit(1).execute()
-        health_status["apis"]["supabase"] = "ok"
-    except Exception as e:
-        health_status["apis"]["supabase"] = "down"
-        health_status["warnings"].append(f"Supabase error: {str(e)[:80]}")
-        health_status["status"] = "degraded"
-    
+        health_status["apis"]["gemini_query"] = "down"
+        health_status["warnings"].append(f"Gemini Query API error: {str(e)[:80]}")
+
     return health_status
 
 

@@ -357,7 +357,7 @@ async def health_check():
     
     # Test Gemini Query API
     try:
-        model = genai.GenerativeModel("models/gemini-1.5-flash")
+        model = model = genai.GenerativeModel("gemini-pro")
         response = model.generate_content(
             "test",
             generation_config={"max_output_tokens": 10}

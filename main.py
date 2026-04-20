@@ -3,6 +3,7 @@ import io
 import asyncio
 from typing import List
 import hashlib
+import re
 
 import fitz  # PyMuPDF
 import httpx
@@ -211,6 +212,41 @@ async def download_pdf(url: str) -> bytes:
 
 
 # ---------------------------------------------------------------------------
+# MARKDOWN CLEANING FUNCTION
+# ---------------------------------------------------------------------------
+
+def clean_markdown(text: str) -> str:
+    """
+    Remove Markdown formatting from text.
+    Keeps content clean and plain for Bubble display.
+    """
+    # Remove markdown headers (##, ###, etc.)
+    text = re.sub(r'^#+\s+', '', text, flags=re.MULTILINE)
+    
+    # Remove **bold** formatting
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+    
+    # Remove *italic* formatting
+    text = re.sub(r'\*(.+?)\*', r'\1', text)
+    
+    # Remove __underline__ formatting
+    text = re.sub(r'__(.+?)__', r'\1', text)
+    
+    # Remove ++ formatting (if any)
+    text = re.sub(r'\+\+(.+?)\+\+', r'\1', text)
+    
+    # Clean up multiple consecutive newlines (keep max 2)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    
+    # Remove leading/trailing whitespace from each line
+    lines = text.split('\n')
+    lines = [line.strip() for line in lines]
+    text = '\n'.join(lines)
+    
+    return text.strip()
+
+
+# ---------------------------------------------------------------------------
 # MEDICAL BOOK REFERENCES
 # ---------------------------------------------------------------------------
 
@@ -330,6 +366,8 @@ RULES FOR YOUR RESPONSE:
 - For NEET: use curriculum-level language
 - For MBBS: can be more detailed and comprehensive
 - If there's any ambiguity in the question, clarify it
+- DO NOT use Markdown formatting (no ##, **, __, etc.)
+- Return plain text only
 
 Now provide the accurate medical answer:"""
     
@@ -528,7 +566,7 @@ async def search_vault(request: SearchVaultRequest):
 
 @app.post("/query", response_model=AiQueryResponse)
 async def gemini_query(request: QueryRequest):
-    """Main medical query endpoint using Gemini."""
+    """Main medical query endpoint using Gemini - returns clean plain text."""
     
     prompt = build_medical_prompt(
         query=request.query,
@@ -550,6 +588,9 @@ async def gemini_query(request: QueryRequest):
         if not response.text:
             raise HTTPException(status_code=500, detail="Gemini returned empty response")
         
+        # CLEAN MARKDOWN FORMATTING
+        clean_answer = clean_markdown(response.text)
+        
         # Extract mentioned textbooks
         sources = []
         book_keywords = {
@@ -564,7 +605,7 @@ async def gemini_query(request: QueryRequest):
             "Netter": "Netter's Anatomy",
         }
         
-        answer_lower = response.text.lower()
+        answer_lower = clean_answer.lower()
         for keyword, full_name in book_keywords.items():
             if keyword.lower() in answer_lower:
                 sources.append(full_name)
@@ -575,7 +616,7 @@ async def gemini_query(request: QueryRequest):
         sources = list(dict.fromkeys(sources))
         
         return AiQueryResponse(
-            answer=response.text,
+            answer=clean_answer,
             sources=sources,
             confidence=0.95
         )

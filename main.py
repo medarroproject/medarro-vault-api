@@ -166,9 +166,9 @@ def get_embedding_gemini(text: str) -> List[float]:
     """
     try:
         response = genai.embed_content(
-            model="models/embedding-001",
+            model="models/text-embedding-004",
             content=text,
-            task_type="retrieval_document"
+            task_type="RETRIEVAL_DOCUMENT"
         )
         if response and "embedding" in response:
             print(f"✅ Embedding generated (length: {len(response['embedding'])})")
@@ -704,9 +704,9 @@ async def api_status():
     
     try:
         genai.embed_content(
-            model="models/embedding-001",
+            model="models/text-embedding-004",
             content="test",
-            task_type="retrieval_document"
+            task_type="RETRIEVAL_DOCUMENT"
         )
         status["vector_search_available"] = True
     except Exception as e:

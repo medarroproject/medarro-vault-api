@@ -377,25 +377,38 @@ async def health_check():
         },
         "warnings": []
     }
-
-    # Test Gemini query
+    
+    
+    # Test Gemini Query API
     try:
-        model = genai.GenerativeModel("models/gemini-2.5-flash")
+        model = genai.GenerativeModel("gemini-1.5-flash")
         response = model.generate_content(
-            contents=[{"role": "user", "parts": [{"text": "Say OK"}]}]
+            "test",
+            generation_config={"max_output_tokens": 10}
         )
-        response_text = None
         try:
             response_text = response.text
-        except:
-            pass
-        if not response_text and hasattr(response, "candidates"):
-            try:
-                response_text = response.candidates[0].content.parts[0].text
-            except:
-                pass
-        if response_text and len(response_text.strip()) > 0:
+        except Exception:
+            response_text = None
+        if response and response_text:
             health_status["apis"]["gemini_query"] = "ok"
+        else:
+            health_status["apis"]["gemini_query"] = "degraded"
+            health_status["warnings"].append("Gemini Query API responding but producing empty responses")
+    except Exception as e:
+        health_status["apis"]["gemini_query"] = "down"
+        health_status["warnings"].append(f"Gemini Query API error: {str(e)[:80]}")
+        health_status["status"] = "degraded"
+    
+    # Test Gemini Embeddings API
+    try:
+        test_embedding = genai.embed_content(
+            model="models/embedding-001",
+            content="test",
+            task_type="retrieval_document"
+        )
+        if test_embedding and "embedding" in test_embedding:
+            health_status["apis"]["gemini_embeddings"] = "ok"
         else:
             health_status["apis"]["gemini_query"] = "degraded"
             health_status["warnings"].append("Gemini returned empty response")
@@ -415,6 +428,8 @@ async def health_check():
         health_status["warnings"].append(f"Embedding error: {str(e)[:80]}")
 
     return health_status
+
+
 
 
 # ---------------------------------------------------------------------------

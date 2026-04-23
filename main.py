@@ -34,13 +34,20 @@ except Exception as e:
     raise
 
 # SentenceTransformer - Local embedding model (FREE, no API key needed)
-# Downloads ~80MB on first deploy, then cached
-try:
-    st_model = SentenceTransformer('all-MiniLM-L6-v2')
-    print("✅ SentenceTransformer model loaded (384 dimensions)")
-except Exception as e:
-    print(f"❌ SentenceTransformer load error: {e}")
-    raise
+# Lazy loaded on first request to avoid download during build/deploy
+st_model = None  # Lazy load on first use
+
+
+def get_st_model():
+    global st_model
+    if st_model is None:
+        try:
+            st_model = SentenceTransformer('all-MiniLM-L6-v2')
+            print("✅ SentenceTransformer model loaded (384 dimensions)")
+        except Exception as e:
+            print(f"❌ SentenceTransformer load error: {e}")
+            raise
+    return st_model
 
 supabase: Client = create_client(
     os.getenv("SUPABASE_URL"),
@@ -177,7 +184,8 @@ def get_embedding(text: str) -> List[float]:
     - No API key required
     """
     try:
-        embedding = st_model.encode(text, normalize_embeddings=True).tolist()
+        model = get_st_model()
+        embedding = model.encode(text, normalize_embeddings=True).tolist()
         return embedding
     except Exception as e:
         print(f"❌ Embedding error: {e}")
@@ -357,14 +365,15 @@ async def health_check():
         "version": "3.0.0",
         "apis": {
             "gemini_query": "ok",
-            "embeddings": "local_sentence_transformers",
+            "embeddings": "local_sentence_transformers (lazy loaded)",
             "supabase": "ok"
         },
         "embedding_info": {
             "model": "all-MiniLM-L6-v2",
             "dimensions": 384,
             "type": "local_free",
-            "cost": "zero"
+            "cost": "zero",
+            "status": "not_loaded_yet" if st_model is None else "loaded"
         },
         "warnings": []
     }

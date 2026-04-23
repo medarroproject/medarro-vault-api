@@ -10,10 +10,10 @@ import httpx
 import google.generativeai as genai
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel
 from supabase import create_client, Client
 from dotenv import load_dotenv
-from sentence_transformers import SentenceTransformer
+from fastembed import TextEmbedding
 
 load_dotenv()
 
@@ -33,21 +33,13 @@ except Exception as e:
     print(f"❌ Gemini configuration error: {e}")
     raise
 
-# SentenceTransformer - Local embedding model (FREE, no API key needed)
-# Lazy loaded on first request to avoid download during build/deploy
-st_model = None  # Lazy load on first use
-
-
-def get_st_model():
-    global st_model
-    if st_model is None:
-        try:
-            st_model = SentenceTransformer('all-MiniLM-L6-v2')
-            print("✅ SentenceTransformer model loaded (384 dimensions)")
-        except Exception as e:
-            print(f"❌ SentenceTransformer load error: {e}")
-            raise
-    return st_model
+# FastEmbed - Lightweight local embedding model (FREE, ~50MB only)
+try:
+    st_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+    print("✅ FastEmbed model loaded (384 dimensions)")
+except Exception as e:
+    print(f"❌ FastEmbed load error: {e}")
+    raise
 
 supabase: Client = create_client(
     os.getenv("SUPABASE_URL"),
@@ -61,7 +53,7 @@ supabase: Client = create_client(
 app = FastAPI(
     title="Medarro Personal Vault API",
     description="PDF ingestion and semantic search backend for Medarro's Personal Vault feature.",
-    version="3.0.0",
+    version="3.1.0",
 )
 
 app.add_middleware(
@@ -177,16 +169,15 @@ def split_into_chunks(pages: List[dict]) -> List[dict]:
 
 def get_embedding(text: str) -> List[float]:
     """
-    Generate embedding using local SentenceTransformer model.
-    - Model: all-MiniLM-L6-v2
+    Generate embedding using FastEmbed (local, lightweight).
+    - Model: BAAI/bge-small-en-v1.5
     - Dimensions: 384
-    - Cost: FREE (runs locally on Railway)
-    - No API key required
+    - Size: ~50MB only
+    - Cost: FREE
     """
     try:
-        model = get_st_model()
-        embedding = model.encode(text, normalize_embeddings=True).tolist()
-        return embedding
+        embeddings = list(st_model.embed([text]))
+        return embeddings[0].tolist()
     except Exception as e:
         print(f"❌ Embedding error: {e}")
         raise HTTPException(
@@ -362,53 +353,40 @@ async def health_check():
     health_status = {
         "status": "ok",
         "service": "Medarro API",
-        "version": "3.0.0",
+        "version": "3.1.0",
         "apis": {
             "gemini_query": "ok",
-            "embeddings": "local_sentence_transformers (lazy loaded)",
+            "embeddings": "fastembed_local",
             "supabase": "ok"
         },
         "embedding_info": {
-            "model": "all-MiniLM-L6-v2",
+            "model": "BAAI/bge-small-en-v1.5",
             "dimensions": 384,
             "type": "local_free",
-            "cost": "zero",
-            "status": "not_loaded_yet" if st_model is None else "loaded"
+            "size": "~50MB",
+            "cost": "zero"
         },
         "warnings": []
     }
-    
-    
-    # Test Gemini Query API
+
+    # Test Gemini query
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("models/gemini-2.5-flash")
         response = model.generate_content(
-            "test",
-            generation_config={"max_output_tokens": 10}
+            contents=[{"role": "user", "parts": [{"text": "Say OK"}]}]
         )
+        response_text = None
         try:
             response_text = response.text
-        except Exception:
-            response_text = None
-        if response and response_text:
+        except:
+            pass
+        if not response_text and hasattr(response, "candidates"):
+            try:
+                response_text = response.candidates[0].content.parts[0].text
+            except:
+                pass
+        if response_text and len(response_text.strip()) > 0:
             health_status["apis"]["gemini_query"] = "ok"
-        else:
-            health_status["apis"]["gemini_query"] = "degraded"
-            health_status["warnings"].append("Gemini Query API responding but producing empty responses")
-    except Exception as e:
-        health_status["apis"]["gemini_query"] = "down"
-        health_status["warnings"].append(f"Gemini Query API error: {str(e)[:80]}")
-        health_status["status"] = "degraded"
-    
-    # Test Gemini Embeddings API
-    try:
-        test_embedding = genai.embed_content(
-            model="models/embedding-001",
-            content="test",
-            task_type="retrieval_document"
-        )
-        if test_embedding and "embedding" in test_embedding:
-            health_status["apis"]["gemini_embeddings"] = "ok"
         else:
             health_status["apis"]["gemini_query"] = "degraded"
             health_status["warnings"].append("Gemini returned empty response")
@@ -420,7 +398,7 @@ async def health_check():
     try:
         test_emb = get_embedding("test")
         if len(test_emb) == 384:
-            health_status["apis"]["embeddings"] = "ok (local, 384 dims)"
+            health_status["apis"]["embeddings"] = "ok (fastembed, 384 dims)"
         else:
             health_status["warnings"].append(f"Unexpected embedding dimensions: {len(test_emb)}")
     except Exception as e:
@@ -428,8 +406,6 @@ async def health_check():
         health_status["warnings"].append(f"Embedding error: {str(e)[:80]}")
 
     return health_status
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -676,7 +652,6 @@ async def gemini_query_stream(request: QueryRequest):
 
 @app.get("/tracks")
 async def get_tracks():
-    """Get available medical tracks and modes."""
     return {
         "tracks": ["NEET", "MBBS", "BHMS", "BDS", "MD/MS"],
         "modes": ["explanation", "exam", "revision", "notes", "deep-dive"]
@@ -685,19 +660,17 @@ async def get_tracks():
 
 @app.get("/books")
 async def get_books():
-    """Get recommended medical textbooks."""
     return MEDICAL_BOOKS
 
 
 @app.get("/status")
 async def api_status():
-    """Check API status."""
     status = {
         "vector_search_available": True,
         "full_text_search_fallback": False,
         "gemini_query_api": "ok",
-        "embedding_type": "local_sentence_transformers",
-        "embedding_model": "all-MiniLM-L6-v2",
+        "embedding_type": "fastembed_local",
+        "embedding_model": "BAAI/bge-small-en-v1.5",
         "embedding_dimensions": 384,
         "embedding_cost": "free",
         "recommendations": []

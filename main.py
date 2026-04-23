@@ -3,6 +3,7 @@ import io
 import asyncio
 from typing import List
 import hashlib
+import re
 
 import fitz  # PyMuPDF
 import httpx
@@ -12,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
 from supabase import create_client, Client
 from dotenv import load_dotenv
+from sentence_transformers import SentenceTransformer
 
 load_dotenv()
 
@@ -19,7 +21,7 @@ load_dotenv()
 # Clients
 # ---------------------------------------------------------------------------
 
-# Gemini Configuration - Using correct available models
+# Gemini Configuration - Used ONLY for text generation (not embeddings)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise ValueError("❌ GEMINI_API_KEY environment variable is required")
@@ -30,6 +32,22 @@ try:
 except Exception as e:
     print(f"❌ Gemini configuration error: {e}")
     raise
+
+# SentenceTransformer - Local embedding model (FREE, no API key needed)
+# Lazy loaded on first request to avoid download during build/deploy
+st_model = None  # Lazy load on first use
+
+
+def get_st_model():
+    global st_model
+    if st_model is None:
+        try:
+            st_model = SentenceTransformer('all-MiniLM-L6-v2')
+            print("✅ SentenceTransformer model loaded (384 dimensions)")
+        except Exception as e:
+            print(f"❌ SentenceTransformer load error: {e}")
+            raise
+    return st_model
 
 supabase: Client = create_client(
     os.getenv("SUPABASE_URL"),
@@ -43,7 +61,7 @@ supabase: Client = create_client(
 app = FastAPI(
     title="Medarro Personal Vault API",
     description="PDF ingestion and semantic search backend for Medarro's Personal Vault feature.",
-    version="2.0.0",
+    version="3.0.0",
 )
 
 app.add_middleware(
@@ -85,7 +103,6 @@ class SearchVaultResponse(BaseModel):
     results: List[VaultSearchResult]
 
 
-# Gemini AI Models
 class AiQueryRequest(BaseModel):
     query: str
     user_id: str = None
@@ -158,44 +175,24 @@ def split_into_chunks(pages: List[dict]) -> List[dict]:
     return chunks
 
 
-def get_embedding_gemini(text: str) -> List[float]:
+def get_embedding(text: str) -> List[float]:
     """
-    Generate embedding using Gemini API.
-    Falls back to hash-based if API fails.
+    Generate embedding using local SentenceTransformer model.
+    - Model: all-MiniLM-L6-v2
+    - Dimensions: 384
+    - Cost: FREE (runs locally on Railway)
+    - No API key required
     """
     try:
-        response = genai.embed_content(
-            model="models/embedding-001",
-            content=text,
-            task_type="retrieval_document"
-        )
-        if response and "embedding" in response:
-            print(f"✅ Embedding generated (length: {len(response['embedding'])})")
-            return response["embedding"]
+        model = get_st_model()
+        embedding = model.encode(text, normalize_embeddings=True).tolist()
+        return embedding
     except Exception as e:
-        error_msg = str(e)
-        print(f"⚠️ Gemini Embedding API error: {error_msg}")
-        
-        if any(keyword in error_msg.lower() for keyword in ["quota", "permission", "disabled", "not enabled", "429", "403", "resource exhausted"]):
-            print("📌 Using fallback hash-based embedding")
-            return get_embedding_fallback(text)
-        
+        print(f"❌ Embedding error: {e}")
         raise HTTPException(
             status_code=503,
-            detail=f"Embedding service error: {error_msg[:100]}"
+            detail=f"Embedding service error: {str(e)}"
         )
-
-
-def get_embedding_fallback(text: str) -> List[float]:
-    """Fallback hash-based embedding when API fails."""
-    hash_obj = hashlib.sha256(text.encode())
-    hash_bytes = hash_obj.digest()
-    
-    embedding = []
-    for i in range(1536):
-        embedding.append(float(hash_bytes[i % 32]) / 256.0)
-    
-    return embedding
 
 
 async def download_pdf(url: str) -> bytes:
@@ -208,6 +205,24 @@ async def download_pdf(url: str) -> bytes:
                 detail=f"Failed to download PDF. HTTP {response.status_code}",
             )
         return response.content
+
+
+# ---------------------------------------------------------------------------
+# MARKDOWN CLEANING FUNCTION
+# ---------------------------------------------------------------------------
+
+def clean_markdown(text: str) -> str:
+    """Remove Markdown formatting from text for clean Bubble display."""
+    text = re.sub(r'^#+\s+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+    text = re.sub(r'\*(.+?)\*', r'\1', text)
+    text = re.sub(r'__(.+?)__', r'\1', text)
+    text = re.sub(r'\+\+(.+?)\+\+', r'\1', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    lines = text.split('\n')
+    lines = [line.strip() for line in lines]
+    text = '\n'.join(lines)
+    return text.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -253,25 +268,25 @@ MODE_INSTRUCTIONS = {
     - Include mechanism/pathophysiology
     - Give clinical relevance
     - Use simple analogies where helpful""",
-    
+
     "exam": """Provide concise exam-ready answer.
     - Short, accurate points
     - No unnecessary details
     - Highlight key differentiators
     - Suitable for MCQs and short answer""",
-    
+
     "revision": """Format as quick revision notes.
     - Bullet points only
     - Key facts highlighted
     - Mnemonics if applicable
     - Memory-friendly format""",
-    
+
     "notes": """Provide detailed study notes.
     - Numbered points
     - Include subtopics
     - Clinical correlations
     - Exam-relevant details""",
-    
+
     "deep-dive": """Comprehensive, research-level answer.
     - Detailed mechanisms
     - Recent advances
@@ -282,9 +297,9 @@ MODE_INSTRUCTIONS = {
 
 def build_medical_prompt(query: str, mode: str = "explanation", track: str = "NEET") -> str:
     """Build medical-specific prompt for Gemini."""
-    
+
     mode_instruction = MODE_INSTRUCTIONS.get(mode, MODE_INSTRUCTIONS["explanation"])
-    
+
     if track == "NEET":
         relevant_books = MEDICAL_BOOKS["NEET"]
     elif track == "MBBS":
@@ -295,9 +310,9 @@ def build_medical_prompt(query: str, mode: str = "explanation", track: str = "NE
         relevant_books = ["Shafer's Textbook of Oral Pathology", "Dental Pharmacology"]
     else:
         relevant_books = MEDICAL_BOOKS["MBBS"]
-    
+
     books_text = "\n".join([f"- {book}" for book in relevant_books])
-    
+
     prompt = f"""You are an expert medical educator for Indian {track} students.
 
 STRICT GUIDELINES:
@@ -330,9 +345,11 @@ RULES FOR YOUR RESPONSE:
 - For NEET: use curriculum-level language
 - For MBBS: can be more detailed and comprehensive
 - If there's any ambiguity in the question, clarify it
+- DO NOT use Markdown formatting (no ##, **, __, etc.)
+- Return plain text only
 
 Now provide the accurate medical answer:"""
-    
+
     return prompt
 
 
@@ -342,15 +359,21 @@ Now provide the accurate medical answer:"""
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint - tests all APIs."""
     health_status = {
         "status": "ok",
         "service": "Medarro API",
-        "version": "2.0.0",
+        "version": "3.0.0",
         "apis": {
             "gemini_query": "ok",
-            "gemini_embeddings": "ok",
+            "embeddings": "local_sentence_transformers (lazy loaded)",
             "supabase": "ok"
+        },
+        "embedding_info": {
+            "model": "all-MiniLM-L6-v2",
+            "dimensions": 384,
+            "type": "local_free",
+            "cost": "zero",
+            "status": "not_loaded_yet" if st_model is None else "loaded"
         },
         "warnings": []
     }
@@ -387,28 +410,23 @@ async def health_check():
         if test_embedding and "embedding" in test_embedding:
             health_status["apis"]["gemini_embeddings"] = "ok"
         else:
-            health_status["apis"]["gemini_embeddings"] = "degraded"
-            health_status["warnings"].append("Embedding API returning invalid response")
+            health_status["apis"]["gemini_query"] = "degraded"
+            health_status["warnings"].append("Gemini returned empty response")
     except Exception as e:
-        error_str = str(e).lower()
-        health_status["apis"]["gemini_embeddings"] = "disabled"
-        
-        if any(keyword in error_str for keyword in ["quota", "resource exhausted"]):
-            health_status["warnings"].append("⚠️ QUOTA EXCEEDED - Fallback to full-text search enabled")
-        elif any(keyword in error_str for keyword in ["permission", "disabled", "not enabled", "403"]):
-            health_status["warnings"].append("⚠️ API DISABLED - Enable in Google Cloud Console")
-        else:
-            health_status["warnings"].append(f"Embedding API error: {str(e)[:80]}")
-    
-    # Test Supabase
+        health_status["apis"]["gemini_query"] = "down"
+        health_status["warnings"].append(f"Gemini Query API error: {str(e)[:80]}")
+
+    # Test local embedding
     try:
-        result = supabase.table("personal_vault").select("*", count="exact").limit(1).execute()
-        health_status["apis"]["supabase"] = "ok"
+        test_emb = get_embedding("test")
+        if len(test_emb) == 384:
+            health_status["apis"]["embeddings"] = "ok (local, 384 dims)"
+        else:
+            health_status["warnings"].append(f"Unexpected embedding dimensions: {len(test_emb)}")
     except Exception as e:
-        health_status["apis"]["supabase"] = "down"
-        health_status["warnings"].append(f"Supabase error: {str(e)[:80]}")
-        health_status["status"] = "degraded"
-    
+        health_status["apis"]["embeddings"] = "down"
+        health_status["warnings"].append(f"Embedding error: {str(e)[:80]}")
+
     return health_status
 
 
@@ -421,7 +439,7 @@ async def health_check():
 @app.post("/upload-pdf", response_model=UploadPDFResponse)
 async def upload_pdf(request: UploadPDFRequest):
     """Download PDF, extract text, chunk, embed, and store in Supabase."""
-    
+
     try:
         pdf_bytes = await download_pdf(request.pdf_url)
     except HTTPException:
@@ -444,7 +462,7 @@ async def upload_pdf(request: UploadPDFRequest):
     inserted_count = 0
     try:
         for chunk in chunks:
-            embedding = get_embedding_gemini(chunk["chunk_text"])
+            embedding = get_embedding(chunk["chunk_text"])
 
             row = {
                 "user_id": request.user_id,
@@ -473,13 +491,13 @@ async def upload_pdf(request: UploadPDFRequest):
 
 @app.post("/search-vault", response_model=SearchVaultResponse)
 async def search_vault(request: SearchVaultRequest):
-    """Search vault with fallback to full-text search."""
-    
+    """Search vault using vector similarity, fallback to full-text search."""
+
     query_embedding = None
     embedding_failed = False
-    
+
     try:
-        query_embedding = get_embedding_gemini(request.query)
+        query_embedding = get_embedding(request.query)
     except Exception as e:
         print(f"⚠️ Vector embedding failed: {str(e)}")
         embedding_failed = True
@@ -495,7 +513,7 @@ async def search_vault(request: SearchVaultRequest):
                     "match_count": 5,
                 },
             ).execute()
-            
+
             if rpc_response.data:
                 results = [
                     VaultSearchResult(
@@ -520,7 +538,7 @@ async def search_vault(request: SearchVaultRequest):
             .full_text_search("chunk_text", request.query) \
             .limit(5) \
             .execute()
-        
+
         if response.data:
             results = [
                 VaultSearchResult(
@@ -534,7 +552,7 @@ async def search_vault(request: SearchVaultRequest):
             return SearchVaultResponse(results=results)
         else:
             return SearchVaultResponse(results=[])
-            
+
     except Exception as e:
         print(f"❌ Full-text search also failed: {str(e)}")
         raise HTTPException(
@@ -549,16 +567,16 @@ async def search_vault(request: SearchVaultRequest):
 
 @app.post("/query", response_model=AiQueryResponse)
 async def gemini_query(request: QueryRequest):
-    """Main medical query endpoint using Gemini."""
-    
+    """Main medical query endpoint using Gemini - returns clean plain text."""
+
     prompt = build_medical_prompt(
         query=request.query,
         mode=request.mode,
         track=request.track
     )
-    
+
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("models/gemini-2.5-flash")
         response = model.generate_content(
             prompt,
             generation_config={
@@ -567,11 +585,12 @@ async def gemini_query(request: QueryRequest):
                 "max_output_tokens": 2000,
             }
         )
-        
+
         if not response.text:
             raise HTTPException(status_code=500, detail="Gemini returned empty response")
-        
-        # Extract mentioned textbooks
+
+        clean_answer = clean_markdown(response.text)
+
         sources = []
         book_keywords = {
             "Gray": "Gray's Anatomy",
@@ -584,23 +603,23 @@ async def gemini_query(request: QueryRequest):
             "NCERT": "NCERT Biology",
             "Netter": "Netter's Anatomy",
         }
-        
-        answer_lower = response.text.lower()
+
+        answer_lower = clean_answer.lower()
         for keyword, full_name in book_keywords.items():
             if keyword.lower() in answer_lower:
                 sources.append(full_name)
-        
+
         if not sources:
             sources = ["Standard Medical References"]
-        
+
         sources = list(dict.fromkeys(sources))
-        
+
         return AiQueryResponse(
-            answer=response.text,
+            answer=clean_answer,
             sources=sources,
             confidence=0.95
         )
-        
+
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -623,16 +642,16 @@ async def gemini_ai_search(request: AiQueryRequest):
 async def gemini_query_stream(request: QueryRequest):
     """Streaming endpoint for long-form answers."""
     from fastapi.responses import StreamingResponse
-    
+
     prompt = build_medical_prompt(
         query=request.query,
         mode=request.mode,
         track=request.track
     )
-    
+
     async def generate():
         try:
-            model = genai.GenerativeModel("gemini-1.5-flash")
+            model = genai.GenerativeModel("models/gemini-2.5-flash")
             response = model.generate_content(
                 prompt,
                 stream=True,
@@ -642,14 +661,12 @@ async def gemini_query_stream(request: QueryRequest):
                     "max_output_tokens": 2000,
                 }
             )
-            
             for chunk in response:
                 if chunk.text:
                     yield chunk.text
-                    
         except Exception as e:
             yield f"Error: {str(e)}"
-    
+
     return StreamingResponse(generate(), media_type="text/plain")
 
 
@@ -674,31 +691,29 @@ async def get_books():
 
 @app.get("/status")
 async def api_status():
-    """Check API status and fallback mode."""
+    """Check API status."""
     status = {
         "vector_search_available": True,
         "full_text_search_fallback": False,
         "gemini_query_api": "ok",
+        "embedding_type": "local_sentence_transformers",
+        "embedding_model": "all-MiniLM-L6-v2",
+        "embedding_dimensions": 384,
+        "embedding_cost": "free",
         "recommendations": []
     }
-    
+
     try:
-        genai.embed_content(
-            model="models/embedding-001",
-            content="test",
-            task_type="retrieval_document"
-        )
-        status["vector_search_available"] = True
-    except Exception as e:
-        error_str = str(e).lower()
-        if any(keyword in error_str for keyword in ["quota", "resource exhausted", "permission", "disabled", "403", "429"]):
-            status["vector_search_available"] = False
-            status["full_text_search_fallback"] = True
-            status["recommendations"].append("⚠️ Vector search disabled - using full-text search fallback")
-            status["recommendations"].append("Check: /health endpoint for details")
+        test_emb = get_embedding("test medical query")
+        if len(test_emb) == 384:
+            status["vector_search_available"] = True
         else:
-            status["recommendations"].append(f"Embedding service error: {str(e)[:80]}")
-    
+            status["recommendations"].append(f"Unexpected embedding size: {len(test_emb)}")
+    except Exception as e:
+        status["vector_search_available"] = False
+        status["full_text_search_fallback"] = True
+        status["recommendations"].append(f"Embedding error: {str(e)[:80]}")
+
     return status
 
 

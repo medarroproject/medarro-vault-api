@@ -1,9 +1,11 @@
 import os
 import io
 import asyncio
+import json
 from typing import List
 import hashlib
 import re
+from datetime import datetime, date
 
 import fitz  # PyMuPDF
 import httpx
@@ -21,7 +23,6 @@ load_dotenv()
 # Clients
 # ---------------------------------------------------------------------------
 
-# Gemini Configuration - Used ONLY for text generation (not embeddings)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise ValueError("❌ GEMINI_API_KEY environment variable is required")
@@ -33,7 +34,6 @@ except Exception as e:
     print(f"❌ Gemini configuration error: {e}")
     raise
 
-# FastEmbed - Lightweight local embedding model (FREE, ~50MB only)
 try:
     st_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
     print("✅ FastEmbed model loaded (384 dimensions)")
@@ -51,14 +51,20 @@ supabase: Client = create_client(
 # ---------------------------------------------------------------------------
 
 app = FastAPI(
-    title="Medarro Personal Vault API",
-    description="PDF ingestion and semantic search backend for Medarro's Personal Vault feature.",
-    version="3.1.0",
+    title="Medarro API",
+    description="AI-powered medical education backend for Medarro platform.",
+    version="4.0.0",
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "*",
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "https://*.lovable.app",
+        "https://*.vercel.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -98,7 +104,7 @@ class SearchVaultResponse(BaseModel):
 class AiQueryRequest(BaseModel):
     query: str
     user_id: str = None
-    mode: str = "explanation"
+    mode: str = "deep-explanation"
     track: str = "NEET"
 
 
@@ -110,8 +116,42 @@ class AiQueryResponse(BaseModel):
 
 class QueryRequest(BaseModel):
     query: str
-    mode: str = "explanation"
+    mode: str = "deep-explanation"
     track: str = "NEET"
+
+
+# Study Plan Models
+class StudyPlanRequest(BaseModel):
+    user_id: str
+    target_exam: str = "NEET UG"
+    target_date: str  # "2025-08-03"
+    daily_hours: int = 6
+    weak_subjects: List[str] = []
+    current_progress: dict = {}
+    track: str = "NEET"
+
+
+class StudyTask(BaseModel):
+    subject: str
+    topic: str
+    duration_minutes: int
+    mode: str
+    priority: str
+    time_slot: str
+
+
+class StudyPlanDay(BaseModel):
+    day: str
+    date: str
+    total_hours: float
+    tasks: List[StudyTask]
+
+
+class StudyPlanResponse(BaseModel):
+    plan: List[StudyPlanDay]
+    weekly_subject_split: dict
+    ai_insight: str
+    total_days_remaining: int
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +163,6 @@ OVERLAP_WORDS = 100
 
 
 def extract_pages(pdf_bytes: bytes) -> List[dict]:
-    """Extract text from each page of a PDF."""
     pages = []
     try:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -131,7 +170,10 @@ def extract_pages(pdf_bytes: bytes) -> List[dict]:
             page = doc[page_index]
             text = page.get_text("text")
             if text.strip():
-                pages.append({"page_number": page_index + 1, "text": text})
+                pages.append({
+                    "page_number": page_index + 1,
+                    "text": text
+                })
         doc.close()
     except Exception as e:
         print(f"❌ PDF extraction error: {e}")
@@ -140,7 +182,6 @@ def extract_pages(pdf_bytes: bytes) -> List[dict]:
 
 
 def split_into_chunks(pages: List[dict]) -> List[dict]:
-    """Split pages into overlapping word chunks."""
     word_page_pairs = []
     for page in pages:
         words = page["text"].split()
@@ -159,7 +200,10 @@ def split_into_chunks(pages: List[dict]) -> List[dict]:
         window = word_page_pairs[start:end]
         chunk_text = " ".join(w for w, _ in window)
         page_number = window[0][1]
-        chunks.append({"chunk_text": chunk_text, "page_number": page_number})
+        chunks.append({
+            "chunk_text": chunk_text,
+            "page_number": page_number
+        })
         if end == len(word_page_pairs):
             break
         start += step
@@ -168,13 +212,6 @@ def split_into_chunks(pages: List[dict]) -> List[dict]:
 
 
 def get_embedding(text: str) -> List[float]:
-    """
-    Generate embedding using FastEmbed (local, lightweight).
-    - Model: BAAI/bge-small-en-v1.5
-    - Dimensions: 384
-    - Size: ~50MB only
-    - Cost: FREE
-    """
     try:
         embeddings = list(st_model.embed([text]))
         return embeddings[0].tolist()
@@ -187,8 +224,10 @@ def get_embedding(text: str) -> List[float]:
 
 
 async def download_pdf(url: str) -> bytes:
-    """Asynchronously download PDF from URL."""
-    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+    async with httpx.AsyncClient(
+        timeout=60.0,
+        follow_redirects=True
+    ) as client:
         response = await client.get(url)
         if response.status_code != 200:
             raise HTTPException(
@@ -199,11 +238,10 @@ async def download_pdf(url: str) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# MARKDOWN CLEANING FUNCTION
+# MARKDOWN CLEANING
 # ---------------------------------------------------------------------------
 
 def clean_markdown(text: str) -> str:
-    """Remove Markdown formatting from text for clean Bubble display."""
     text = re.sub(r'^#+\s+', '', text, flags=re.MULTILINE)
     text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
     text = re.sub(r'\*(.+?)\*', r'\1', text)
@@ -240,7 +278,7 @@ MEDICAL_BOOKS = {
     ],
     "PHARMACOLOGY": [
         "KD Tripathi Essentials of Medical Pharmacology",
-        "Goodman & Gilman's Pharmacological Basis of Therapeutics"
+        "Goodman & Gilman's Pharmacological Basis"
     ],
     "SURGERY": [
         "SRB Manual of Surgery",
@@ -253,8 +291,79 @@ MEDICAL_BOOKS = {
     ]
 }
 
+# ---------------------------------------------------------------------------
+# UPDATED MODE INSTRUCTIONS — Lovable 4 modes + legacy modes
+# ---------------------------------------------------------------------------
+
 MODE_INSTRUCTIONS = {
-    "explanation": """Explain the concept thoroughly but in student-friendly language.
+
+    # ── Lovable Frontend Modes ──────────────────────────────────────────────
+
+    "deep-explanation": """Explain the concept thoroughly
+    in student-friendly language.
+    - Start with a clear definition
+    - Include mechanism / pathophysiology
+    - Give clinical relevance
+    - Use simple analogies where helpful
+    - Include all important details
+    - Mention landmark studies if relevant
+    - Format: flowing paragraphs""",
+
+    "quick-summary": """Provide a concise revision-ready summary.
+    - 5-7 key bullet points only
+    - No unnecessary details
+    - Highlight key differentiators
+    - Memory-friendly format
+    - Include 1 mnemonic if applicable
+    - Suitable for quick revision""",
+
+    "mcq-practice": """Generate exactly 5 high-quality MCQs
+    on this topic at NEET/MBBS exam level.
+
+    Use this EXACT format for each question:
+
+    Q1. [Question text]
+    A. [Option A]
+    B. [Option B]
+    C. [Option C]
+    D. [Option D]
+    Answer: [Correct letter e.g. B]
+    Explanation: [Clear explanation of why this answer is correct]
+
+    Q2. [Question text]
+    A. [Option A]
+    B. [Option B]
+    C. [Option C]
+    D. [Option D]
+    Answer: [Correct letter]
+    Explanation: [Explanation]
+
+    Continue for all 5 questions.
+    Make questions exam-relevant and clinically important.""",
+
+    "rapid-recall": """Rapid recall format for last-minute exam prep.
+    Include ALL of these sections:
+
+    DEFINITION: [1 crisp line]
+
+    KEY POINTS:
+    - [Point 1]
+    - [Point 2]
+    - [Point 3 - max 5 points]
+
+    MNEMONIC: [Easy to remember mnemonic]
+
+    FLOWCHART:
+    [Step/Component 1] → [Step/Component 2] → [Step/Component 3]
+
+    EXAM TIP: [Exactly how this topic is asked in NEET/MBBS exams]
+
+    HIGH YIELD FACT: [Single most important thing to remember]""",
+
+    # ── Legacy Modes (kept for backward compatibility) ──────────────────────
+
+    "explanation": """Explain the concept thoroughly
+    but in student-friendly language.
     - Start with definition
     - Include mechanism/pathophysiology
     - Give clinical relevance
@@ -286,36 +395,58 @@ MODE_INSTRUCTIONS = {
 }
 
 
-def build_medical_prompt(query: str, mode: str = "explanation", track: str = "NEET") -> str:
-    """Build medical-specific prompt for Gemini."""
+def build_medical_prompt(
+    query: str,
+    mode: str = "deep-explanation",
+    track: str = "NEET"
+) -> str:
 
-    mode_instruction = MODE_INSTRUCTIONS.get(mode, MODE_INSTRUCTIONS["explanation"])
+    mode_instruction = MODE_INSTRUCTIONS.get(
+        mode,
+        MODE_INSTRUCTIONS["deep-explanation"]
+    )
 
     if track == "NEET":
         relevant_books = MEDICAL_BOOKS["NEET"]
     elif track == "MBBS":
-        relevant_books = MEDICAL_BOOKS["MBBS"] + [MEDICAL_BOOKS["BD Chaurasia"][0]]
+        relevant_books = (
+            MEDICAL_BOOKS["MBBS"]
+            + [MEDICAL_BOOKS["BD Chaurasia"][0]]
+        )
     elif track == "BHMS":
-        relevant_books = ["Boericke's Materia Medica", "Organon of Medicine"]
+        relevant_books = [
+            "Boericke's Materia Medica",
+            "Organon of Medicine"
+        ]
     elif track == "BDS":
-        relevant_books = ["Shafer's Textbook of Oral Pathology", "Dental Pharmacology"]
+        relevant_books = [
+            "Shafer's Textbook of Oral Pathology",
+            "Dental Pharmacology"
+        ]
     else:
         relevant_books = MEDICAL_BOOKS["MBBS"]
 
     books_text = "\n".join([f"- {book}" for book in relevant_books])
 
-    prompt = f"""You are an expert medical educator for Indian {track} students.
+    prompt = f"""You are an expert medical educator \
+for Indian {track} students.
 
 STRICT GUIDELINES:
-1. ONLY answer based on standard medical textbooks and established medical knowledge
+1. ONLY answer based on standard medical textbooks
+   and established medical knowledge
 2. Reference specific textbooks when relevant
-3. Use EXACT medical terminology - no approximations
-4. If uncertain, clearly state: "This topic is not covered in standard {track} curriculum"
-5. Prioritize ICMR, WHO, and Indian medical standards where applicable
-6. For drugs: include generic name, class, mechanism, important side effects
-7. For anatomy: describe structures, relations, nerve/blood supply accurately
-8. For physiology: explain mechanisms at cellular/system level with accuracy
-9. For pathology: describe pathogenesis, pathology, clinical features accurately
+3. Use EXACT medical terminology — no approximations
+4. If uncertain, clearly state:
+   "This topic is not covered in standard {track} curriculum"
+5. Prioritize ICMR, WHO, and Indian medical standards
+6. For drugs: include generic name, class,
+   mechanism, important side effects
+7. For anatomy: describe structures, relations,
+   nerve/blood supply accurately
+8. For physiology: explain mechanisms at
+   cellular/system level with accuracy
+9. For pathology: describe pathogenesis, pathology,
+   clinical features accurately
 
 STUDENT LEVEL: {track} track medical student
 ANSWER MODE: {mode}
@@ -329,14 +460,15 @@ RELEVANT TEXTBOOKS FOR THIS QUERY:
 STUDENT QUESTION: {query}
 
 RULES FOR YOUR RESPONSE:
-- Be factually accurate - this is for medical education
-- Include source references (textbook names) naturally in the answer
+- Be factually accurate — this is for medical education
+- Include source references naturally in the answer
 - Highlight key points the student MUST remember
 - Include clinical correlations where relevant
 - For NEET: use curriculum-level language
 - For MBBS: can be more detailed and comprehensive
-- If there's any ambiguity in the question, clarify it
-- DO NOT use Markdown formatting (no ##, **, __, etc.)
+- If there is any ambiguity, clarify it
+- DO NOT use Markdown formatting
+  (no ##, **, __, bullet dashes, etc.)
 - Return plain text only
 
 Now provide the accurate medical answer:"""
@@ -345,7 +477,7 @@ Now provide the accurate medical answer:"""
 
 
 # ---------------------------------------------------------------------------
-# Endpoints - Health Check
+# Endpoints — Health Check
 # ---------------------------------------------------------------------------
 
 @app.get("/health")
@@ -353,7 +485,7 @@ async def health_check():
     health_status = {
         "status": "ok",
         "service": "Medarro API",
-        "version": "3.1.0",
+        "version": "4.0.0",
         "apis": {
             "gemini_query": "ok",
             "embeddings": "fastembed_local",
@@ -366,14 +498,17 @@ async def health_check():
             "size": "~50MB",
             "cost": "zero"
         },
+        "modes_available": list(MODE_INSTRUCTIONS.keys()),
         "warnings": []
     }
 
-    # Test Gemini query
     try:
         model = genai.GenerativeModel("models/gemini-2.5-flash")
         response = model.generate_content(
-            contents=[{"role": "user", "parts": [{"text": "Say OK"}]}]
+            contents=[{
+                "role": "user",
+                "parts": [{"text": "Say OK"}]
+            }]
         )
         response_text = None
         try:
@@ -382,64 +517,85 @@ async def health_check():
             pass
         if not response_text and hasattr(response, "candidates"):
             try:
-                response_text = response.candidates[0].content.parts[0].text
+                response_text = (
+                    response.candidates[0]
+                    .content.parts[0].text
+                )
             except:
                 pass
         if response_text and len(response_text.strip()) > 0:
             health_status["apis"]["gemini_query"] = "ok"
         else:
             health_status["apis"]["gemini_query"] = "degraded"
-            health_status["warnings"].append("Gemini returned empty response")
+            health_status["warnings"].append(
+                "Gemini returned empty response"
+            )
     except Exception as e:
         health_status["apis"]["gemini_query"] = "down"
-        health_status["warnings"].append(f"Gemini Query API error: {str(e)[:80]}")
+        health_status["warnings"].append(
+            f"Gemini error: {str(e)[:80]}"
+        )
 
-    # Test local embedding
     try:
         test_emb = get_embedding("test")
         if len(test_emb) == 384:
-            health_status["apis"]["embeddings"] = "ok (fastembed, 384 dims)"
+            health_status["apis"]["embeddings"] = (
+                "ok (fastembed, 384 dims)"
+            )
         else:
-            health_status["warnings"].append(f"Unexpected embedding dimensions: {len(test_emb)}")
+            health_status["warnings"].append(
+                f"Unexpected dims: {len(test_emb)}"
+            )
     except Exception as e:
         health_status["apis"]["embeddings"] = "down"
-        health_status["warnings"].append(f"Embedding error: {str(e)[:80]}")
+        health_status["warnings"].append(
+            f"Embedding error: {str(e)[:80]}"
+        )
 
     return health_status
 
 
 # ---------------------------------------------------------------------------
-# Endpoints - PDF Upload & Search
+# Endpoints — PDF Upload & Vault Search
 # ---------------------------------------------------------------------------
 
 @app.post("/upload-pdf", response_model=UploadPDFResponse)
 async def upload_pdf(request: UploadPDFRequest):
-    """Download PDF, extract text, chunk, embed, and store in Supabase."""
-
     try:
         pdf_bytes = await download_pdf(request.pdf_url)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error downloading PDF: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error downloading PDF: {str(e)}"
+        )
 
     try:
         pages = extract_pages(pdf_bytes)
     except Exception as e:
-        raise HTTPException(status_code=422, detail=f"Error extracting PDF text: {str(e)}")
+        raise HTTPException(
+            status_code=422,
+            detail=f"Error extracting PDF text: {str(e)}"
+        )
 
     if not pages:
-        raise HTTPException(status_code=422, detail="PDF appears to contain no extractable text")
+        raise HTTPException(
+            status_code=422,
+            detail="PDF contains no extractable text"
+        )
 
     chunks = split_into_chunks(pages)
     if not chunks:
-        raise HTTPException(status_code=422, detail="No text chunks could be generated from this PDF")
+        raise HTTPException(
+            status_code=422,
+            detail="No text chunks could be generated"
+        )
 
     inserted_count = 0
     try:
         for chunk in chunks:
             embedding = get_embedding(chunk["chunk_text"])
-
             row = {
                 "user_id": request.user_id,
                 "pdf_name": request.pdf_name,
@@ -447,28 +603,33 @@ async def upload_pdf(request: UploadPDFRequest):
                 "chunk_text": chunk["chunk_text"],
                 "embedding": embedding,
             }
-
-            result = supabase.table("personal_vault").insert(row).execute()
-
+            result = (
+                supabase.table("personal_vault")
+                .insert(row)
+                .execute()
+            )
             if not result.data:
                 raise HTTPException(
                     status_code=500,
                     detail="Supabase insert failed. Check RLS policies.",
                 )
             inserted_count += 1
-
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error during storage: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error during storage: {str(e)}"
+        )
 
-    return UploadPDFResponse(status="ready", chunks_count=inserted_count)
+    return UploadPDFResponse(
+        status="ready",
+        chunks_count=inserted_count
+    )
 
 
 @app.post("/search-vault", response_model=SearchVaultResponse)
 async def search_vault(request: SearchVaultRequest):
-    """Search vault using vector similarity, fallback to full-text search."""
-
     query_embedding = None
     embedding_failed = False
 
@@ -478,7 +639,6 @@ async def search_vault(request: SearchVaultRequest):
         print(f"⚠️ Vector embedding failed: {str(e)}")
         embedding_failed = True
 
-    # Try vector search first
     if query_embedding and not embedding_failed:
         try:
             rpc_response = supabase.rpc(
@@ -505,15 +665,16 @@ async def search_vault(request: SearchVaultRequest):
             print(f"⚠️ Vector search RPC failed: {str(e)}")
             embedding_failed = True
 
-    # FALLBACK: Full-text search
     print("📌 Falling back to full-text search")
     try:
-        response = supabase.table("personal_vault") \
-            .select("chunk_text, pdf_name, page_number") \
-            .eq("user_id", request.user_id) \
-            .full_text_search("chunk_text", request.query) \
-            .limit(5) \
+        response = (
+            supabase.table("personal_vault")
+            .select("chunk_text, pdf_name, page_number")
+            .eq("user_id", request.user_id)
+            .full_text_search("chunk_text", request.query)
+            .limit(5)
             .execute()
+        )
 
         if response.data:
             results = [
@@ -530,21 +691,19 @@ async def search_vault(request: SearchVaultRequest):
             return SearchVaultResponse(results=[])
 
     except Exception as e:
-        print(f"❌ Full-text search also failed: {str(e)}")
+        print(f"❌ Full-text search failed: {str(e)}")
         raise HTTPException(
             status_code=503,
-            detail=f"Search service temporarily unavailable: {str(e)[:100]}"
+            detail=f"Search unavailable: {str(e)[:100]}"
         )
 
 
 # ---------------------------------------------------------------------------
-# Endpoints - Gemini Medical Q&A
+# Endpoints — Gemini Medical Q&A
 # ---------------------------------------------------------------------------
 
 @app.post("/query", response_model=AiQueryResponse)
 async def gemini_query(request: QueryRequest):
-    """Main medical query endpoint using Gemini - returns clean plain text."""
-
     prompt = build_medical_prompt(
         query=request.query,
         mode=request.mode,
@@ -563,7 +722,10 @@ async def gemini_query(request: QueryRequest):
         )
 
         if not response.text:
-            raise HTTPException(status_code=500, detail="Gemini returned empty response")
+            raise HTTPException(
+                status_code=500,
+                detail="Gemini returned empty response"
+            )
 
         clean_answer = clean_markdown(response.text)
 
@@ -605,7 +767,7 @@ async def gemini_query(request: QueryRequest):
 
 @app.post("/search")
 async def gemini_ai_search(request: AiQueryRequest):
-    """Backward compatibility endpoint for /query."""
+    """Backward compatibility endpoint."""
     query_req = QueryRequest(
         query=request.query,
         mode=request.mode,
@@ -616,7 +778,6 @@ async def gemini_ai_search(request: AiQueryRequest):
 
 @app.post("/query-stream")
 async def gemini_query_stream(request: QueryRequest):
-    """Streaming endpoint for long-form answers."""
     from fastapi.responses import StreamingResponse
 
     prompt = build_medical_prompt(
@@ -627,7 +788,9 @@ async def gemini_query_stream(request: QueryRequest):
 
     async def generate():
         try:
-            model = genai.GenerativeModel("models/gemini-2.5-flash")
+            model = genai.GenerativeModel(
+                "models/gemini-2.5-flash"
+            )
             response = model.generate_content(
                 prompt,
                 stream=True,
@@ -643,7 +806,197 @@ async def gemini_query_stream(request: QueryRequest):
         except Exception as e:
             yield f"Error: {str(e)}"
 
-    return StreamingResponse(generate(), media_type="text/plain")
+    return StreamingResponse(
+        generate(),
+        media_type="text/plain"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Endpoints — Study Plan
+# ---------------------------------------------------------------------------
+
+@app.post(
+    "/generate-study-plan",
+    response_model=StudyPlanResponse
+)
+async def generate_study_plan(request: StudyPlanRequest):
+    """Generate AI personalized 7-day study plan."""
+
+    try:
+        target = datetime.strptime(
+            request.target_date, "%Y-%m-%d"
+        ).date()
+        today = date.today()
+        days_remaining = (target - today).days
+    except Exception:
+        days_remaining = 90
+
+    all_subjects = {
+        "NEET": ["Biology", "Physics", "Chemistry"],
+        "MBBS": [
+            "Anatomy", "Physiology",
+            "Biochemistry", "Pharmacology",
+            "Pathology", "Microbiology"
+        ],
+        "BDS": [
+            "Anatomy", "Physiology",
+            "Biochemistry", "Dental Materials",
+            "Oral Pathology"
+        ],
+        "BHMS": [
+            "Organon of Medicine",
+            "Materia Medica",
+            "Anatomy", "Physiology"
+        ]
+    }
+
+    subjects = all_subjects.get(
+        request.track,
+        all_subjects["MBBS"]
+    )
+
+    weak_str = (
+        ", ".join(request.weak_subjects)
+        if request.weak_subjects
+        else "Not specified"
+    )
+
+    # Generate 7 dates from today
+    from datetime import timedelta
+    days_list = []
+    day_names = [
+        "Monday", "Tuesday", "Wednesday",
+        "Thursday", "Friday", "Saturday", "Sunday"
+    ]
+    for i in range(7):
+        d = today + timedelta(days=i)
+        days_list.append({
+            "day": day_names[d.weekday()],
+            "date": d.strftime("%Y-%m-%d")
+        })
+
+    prompt = f"""You are an expert medical education 
+planner for Indian students.
+
+Create a personalized 7-day study plan.
+
+STUDENT INFO:
+- Target Exam: {request.target_exam}
+- Track: {request.track}
+- Days Remaining: {days_remaining}
+- Daily Study Hours: {request.daily_hours}
+- Weak Subjects: {weak_str}
+
+SUBJECTS: {', '.join(subjects)}
+
+DAYS TO PLAN:
+{json.dumps(days_list, indent=2)}
+
+RULES:
+1. Allocate MORE time to weak subjects
+2. Each task: 45-90 minutes max
+3. Mix subjects across each day
+4. Include revision sessions
+5. Realistic and achievable
+6. Match Indian medical curriculum
+
+RESPOND IN THIS EXACT JSON FORMAT ONLY:
+{{
+  "plan": [
+    {{
+      "day": "Monday",
+      "date": "2025-05-13",
+      "total_hours": 6.0,
+      "tasks": [
+        {{
+          "subject": "Anatomy",
+          "topic": "Brachial Plexus Formation",
+          "duration_minutes": 90,
+          "mode": "deep-explanation",
+          "priority": "high",
+          "time_slot": "9:00 AM"
+        }},
+        {{
+          "subject": "Pharmacology",
+          "topic": "ANS — Cholinergic Drugs",
+          "duration_minutes": 60,
+          "mode": "rapid-recall",
+          "priority": "high",
+          "time_slot": "11:00 AM"
+        }}
+      ]
+    }}
+  ],
+  "weekly_subject_split": {{
+    "Anatomy": 22,
+    "Physiology": 18,
+    "Pharmacology": 25,
+    "Pathology": 20,
+    "Biochemistry": 15
+  }},
+  "ai_insight": "Your Pharmacology score is lowest. AI has allocated 25% of weekly time to Pharmacology. Focus on KD Tripathi ANS and CVS chapters this week.",
+  "total_days_remaining": {days_remaining}
+}}
+
+Generate plan for all 7 days with 
+{request.daily_hours} hours each day.
+Return ONLY valid JSON. No extra text."""
+
+    try:
+        model = genai.GenerativeModel(
+            "models/gemini-2.5-flash"
+        )
+        response = model.generate_content(
+            prompt,
+            generation_config={
+                "temperature": 0.3,
+                "max_output_tokens": 4000,
+            }
+        )
+
+        response_text = response.text.strip()
+
+        # Strip markdown if present
+        if "```json" in response_text:
+            response_text = (
+                response_text
+                .split("```json")[1]
+                .split("```")[0]
+                .strip()
+            )
+        elif "```" in response_text:
+            response_text = (
+                response_text
+                .split("```")[1]
+                .split("```")[0]
+                .strip()
+            )
+
+        plan_data = json.loads(response_text)
+
+        return StudyPlanResponse(
+            plan=plan_data.get("plan", []),
+            weekly_subject_split=plan_data.get(
+                "weekly_subject_split", {}
+            ),
+            ai_insight=plan_data.get(
+                "ai_insight",
+                "Stay consistent and focus on weak subjects!"
+            ),
+            total_days_remaining=days_remaining
+        )
+
+    except json.JSONDecodeError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"AI response parse error: {str(e)}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Study plan error: {str(e)}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -654,7 +1007,13 @@ async def gemini_query_stream(request: QueryRequest):
 async def get_tracks():
     return {
         "tracks": ["NEET", "MBBS", "BHMS", "BDS", "MD/MS"],
-        "modes": ["explanation", "exam", "revision", "notes", "deep-dive"]
+        "modes": list(MODE_INSTRUCTIONS.keys()),
+        "lovable_modes": [
+            "deep-explanation",
+            "quick-summary",
+            "mcq-practice",
+            "rapid-recall"
+        ]
     }
 
 
@@ -673,6 +1032,7 @@ async def api_status():
         "embedding_model": "BAAI/bge-small-en-v1.5",
         "embedding_dimensions": 384,
         "embedding_cost": "free",
+        "study_plan_endpoint": "available",
         "recommendations": []
     }
 
@@ -681,11 +1041,15 @@ async def api_status():
         if len(test_emb) == 384:
             status["vector_search_available"] = True
         else:
-            status["recommendations"].append(f"Unexpected embedding size: {len(test_emb)}")
+            status["recommendations"].append(
+                f"Unexpected embedding size: {len(test_emb)}"
+            )
     except Exception as e:
         status["vector_search_available"] = False
         status["full_text_search_fallback"] = True
-        status["recommendations"].append(f"Embedding error: {str(e)[:80]}")
+        status["recommendations"].append(
+            f"Embedding error: {str(e)[:80]}"
+        )
 
     return status
 

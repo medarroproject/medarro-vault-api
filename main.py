@@ -19,8 +19,8 @@ load_dotenv()
 
 # ---------------------------------------------------------------------------
 # TWO GEMINI KEYS
-# GEMINI_API_KEY      → AI queries (deep-explanation, mcq, etc.)
-# new_gemini_api_key  → Study plan generation
+# GEMINI_API_KEY     → AI queries
+# new_gemini_api_key → Study plan
 # ---------------------------------------------------------------------------
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -55,7 +55,7 @@ supabase: Client = create_client(
 app = FastAPI(
     title="Medarro API",
     description="AI-powered medical education backend.",
-    version="5.0.0",
+    version="5.1.0",
 )
 
 app.add_middleware(
@@ -113,6 +113,7 @@ class QueryRequest(BaseModel):
     query: str
     mode: str = "deep-explanation"
     track: str = "NEET"
+    context: str = ""  # For vault answers
 
 class StudyPlanRequest(BaseModel):
     user_id: str
@@ -191,7 +192,9 @@ def get_embedding(text: str) -> List[float]:
         raise HTTPException(503, f"Embedding error: {e}")
 
 async def download_pdf(url: str) -> bytes:
-    async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as c:
+    async with httpx.AsyncClient(
+        timeout=120.0, follow_redirects=True
+    ) as c:
         r = await c.get(url)
         if r.status_code != 200:
             raise HTTPException(400, f"PDF download failed: {r.status_code}")
@@ -244,24 +247,61 @@ MEDICAL_BOOKS = {
 
 CLINICAL_GUIDELINES = """
 MANDATORY CLINICAL GUIDELINES:
-- TB: WHO 2022 HRZE regimen
-  H=Isoniazid 5mg/kg, R=Rifampicin 10mg/kg,
+- TB: WHO 2022 — HRZE 2mo + HR 4mo
+  H=Isoniazid 5mg/kg, R=Rifampicin 10mg/kg
   Z=Pyrazinamide 25mg/kg, E=Ethambutol 15mg/kg
-  2 months HRZE + 4 months HR
-- DM Type 2: ICMR 2025 — Metformin first line, HbA1c <7%
-- Hypertension: JNC 8 — <140/90, <130/80 for DM/CKD
-- DKA: NS 15-20ml/kg/hr, Insulin 0.1U/kg/hr, K+ if <3.5
-- CAP: IDSA — Amoxicillin mild, Fluoroquinolone severe
-- Malaria India: NVBDCP
-  P.vivax: Chloroquine + Primaquine 14d
-  P.falciparum: ACT Artesunate-Lumefantrine
+- DM Type 2: ICMR 2025 — Metformin first, HbA1c <7%
+- HTN: JNC 8 — <140/90, <130/80 DM/CKD
+- DKA: NS 15-20ml/kg/hr, Insulin 0.1U/kg/hr
+- Malaria: P.vivax=Chloroquine+Primaquine 14d
+  P.falciparum=ACT Artesunate-Lumefantrine
 """
 
 # ---------------------------------------------------------------------------
-# Mode Instructions — Audit Fixed
+# Mode Instructions
 # ---------------------------------------------------------------------------
 
 MODE_INSTRUCTIONS = {
+
+    # ── Vault Answer Mode — NEW ─────────────────────────────────────────────
+    "vault-answer": """
+You are a MBBS topper sharing notes with a friend.
+Be concise, exam-focused, natural language.
+Max 300 words total. No paragraphs. No textbook language.
+
+FORMAT EXACTLY — ALL sections required:
+
+FINAL ANSWER:
+[2-3 lines. Direct answer only. Natural language.]
+
+HIGH-YIELD POINTS:
+1. [Exam-relevant point]
+2. [Exam-relevant point]
+3. [Exam-relevant point]
+4. [Exam-relevant point]
+5. [Exam-relevant point]
+
+CLINICAL PEARL:
+[One practical clinical insight. 1-2 lines max.]
+
+MNEMONIC:
+[Easy mnemonic if applicable. Skip if not relevant.]
+
+VIVA/PYQ POINT:
+[Exactly how this is asked in exams. 1 line.]
+
+ONE-LINE RECALL:
+[Single sentence. Most important thing to remember.]
+
+RULES:
+- Max 300 words
+- Topper notes style
+- No academic wording
+- Exam focused only
+- Complete all sections
+""",
+
+    # ── AI Study Workspace Modes ────────────────────────────────────────────
 
     "deep-explanation": """
 COMPLETE answer in ALL 6 sections. Never truncate.
@@ -269,29 +309,26 @@ COMPLETE answer in ALL 6 sections. Never truncate.
 1. DEFINITION: One precise line.
 
 2. MECHANISM / PATHOPHYSIOLOGY:
-Complete step-by-step cellular mechanism.
+Complete step-by-step mechanism.
 Include all pathway components.
-Do not skip any step.
 
 3. CLINICAL FEATURES:
 Signs, symptoms, investigations with values.
 
 4. TREATMENT PROTOCOL:
-Drug names + doses + duration + monitoring.
+Drug names + doses + duration.
 Follow WHO/ICMR/Indian guidelines.
 
 5. CLINICAL PEARLS:
 Key exam points, differentials, mnemonics.
 
-6. REFERENCE:
-Specific textbook + chapter.
+6. REFERENCE: Textbook + chapter.
 
 Write until ALL 6 sections complete.
-Never stop mid-sentence.
 """,
 
     "quick-summary": """
-COMPLETE all sections. No truncation.
+COMPLETE all sections. Max 200 words.
 
 KEY FACTS:
 - [Fact 1 - max 15 words]
@@ -311,7 +348,7 @@ MUST REMEMBER: [#1 high yield fact]
 
     "mcq-practice": """
 Generate EXACTLY 5 MCQs. Complete ALL 5.
-NEET/MBBS exam pattern. Never stop at Q1.
+NEET/MBBS exam pattern.
 
 Q1. [Question]
 A. [Option]
@@ -353,14 +390,13 @@ D. [Option]
 Answer: [Letter]
 Explanation: [Correct + why others wrong]
 
-All 5 MUST be completed. High yield topics.
-Include clinical scenario MCQs.
-Based on WHO/ICMR/NCERT guidelines.
+High yield. Clinical scenarios included.
+WHO/ICMR/NCERT based.
 """,
 
     "rapid-recall": """
 Complete ALL sections. No truncation.
-If question asks for a LIST, give COMPLETE list.
+If LIST asked — give COMPLETE list.
 
 DEFINITION: [1 precise line]
 
@@ -370,7 +406,7 @@ COMPLETE LIST / CLASSIFICATION:
 3. [Item 3]
 4. [Item 4]
 5. [Item 5]
-(Continue until list is complete)
+(Continue until complete)
 
 KEY POINTS:
 - [Point 1]
@@ -391,12 +427,29 @@ EXAM TIP: [How asked in NEET/MBBS]
 HIGH YIELD FACT: [#1 to remember]
 """,
 
-    # Legacy
-    "explanation": "Thorough explanation with definition, mechanism, treatment. No truncation.",
-    "exam": "Concise exam answer with key points and treatment protocol.",
+    # ── Legacy ──────────────────────────────────────────────────────────────
+    "explanation": "Thorough explanation: definition, mechanism, treatment.",
+    "exam": "Concise exam answer with key points and treatment.",
     "revision": "Bullet point revision notes with mnemonics.",
     "notes": "Detailed notes with subtopics and clinical correlations.",
-    "deep-dive": "Research-level with mechanisms, guidelines, landmark studies."
+    "deep-dive": "Research-level: mechanisms, guidelines, landmark studies."
+}
+
+# ---------------------------------------------------------------------------
+# Token limits per mode — Speed optimization
+# ---------------------------------------------------------------------------
+
+MODE_TOKENS = {
+    "vault-answer": 800,      # Fast — short format
+    "quick-summary": 1000,    # Medium
+    "rapid-recall": 1200,     # Medium
+    "mcq-practice": 2000,     # Needs 5 MCQs
+    "deep-explanation": 3000, # Full explanation
+    "explanation": 2000,
+    "exam": 1000,
+    "revision": 800,
+    "notes": 2000,
+    "deep-dive": 3000,
 }
 
 # ---------------------------------------------------------------------------
@@ -406,7 +459,8 @@ HIGH YIELD FACT: [#1 to remember]
 def build_medical_prompt(
     query: str,
     mode: str = "deep-explanation",
-    track: str = "NEET"
+    track: str = "NEET",
+    context: str = ""
 ) -> str:
 
     instruction = MODE_INSTRUCTIONS.get(
@@ -415,24 +469,30 @@ def build_medical_prompt(
     books = MEDICAL_BOOKS.get(track, MEDICAL_BOOKS["MBBS"])
     books_text = "\n".join(f"- {b}" for b in books)
 
+    # Vault context section
+    context_section = ""
+    if context:
+        context_section = f"""
+CONTEXT FROM STUDENT'S UPLOADED NOTES:
+{context}
+
+Answer based primarily on this context.
+"""
+
     return f"""You are an expert medical educator for Indian {track} students.
 
-ABSOLUTE RULES:
-1. Answer ONLY from standard medical textbooks
-2. Use EXACT medical terminology
-3. NEVER truncate mid-sentence or mid-list
-4. Complete ALL sections of the answer format
-5. If multi-part question: answer ALL parts
-6. Follow Indian medical curriculum
-7. NO Markdown formatting (no ##, **, __, dashes)
-8. Plain text ONLY
-
+RULES:
+1. ONLY standard medical textbooks
+2. EXACT medical terminology
+3. NEVER truncate — complete ALL sections
+4. Follow Indian medical curriculum
+5. NO Markdown (no ##, **, __)
+6. Plain text ONLY
 {CLINICAL_GUIDELINES}
-
 STUDENT LEVEL: {track}
 MODE: {mode}
-
-FORMAT TO FOLLOW EXACTLY:
+{context_section}
+FORMAT:
 {instruction}
 
 TEXTBOOKS:
@@ -440,9 +500,7 @@ TEXTBOOKS:
 
 QUESTION: {query}
 
-CRITICAL: Write a COMPLETE answer.
-Do NOT stop until every section is done.
-Do NOT truncate any list or explanation."""
+Write COMPLETE answer. Do NOT stop early."""
 
 # ---------------------------------------------------------------------------
 # Health Check
@@ -453,20 +511,19 @@ async def health_check():
     status = {
         "status": "ok",
         "service": "Medarro API",
-        "version": "5.0.0",
+        "version": "5.1.0",
         "apis": {
             "gemini_query": "checking",
             "gemini_study_plan": "checking",
             "embeddings": "checking",
             "supabase": "ok"
         },
-        "fixes": {
-            "max_tokens": "4096 (was 2000)",
-            "timeout": "120s (was 30s)",
-            "truncation": "fixed",
-            "rapid_recall": "fixed",
-            "clinical_guidelines": "added",
-            "dual_gemini_keys": "enabled"
+        "improvements": {
+            "vault_answer_mode": "added",
+            "speed_optimization": "per_mode_tokens",
+            "vault_format": "topper_notes_style",
+            "truncation_fix": "enabled",
+            "clinical_guidelines": "enabled"
         },
         "warnings": []
     }
@@ -548,24 +605,30 @@ async def search_vault(request: SearchVaultRequest):
         rpc = supabase.rpc("match_vault_chunks", {
             "query_embedding": qe,
             "match_user_id": request.user_id,
-            "match_count": 5,
+            "match_count": 3,  # Reduced for speed
         }).execute()
         if rpc.data:
             return SearchVaultResponse(results=[
-                VaultSearchResult(**{k: r[k] for k in
-                    ["chunk_text","pdf_name","page_number","similarity"]})
-                for r in rpc.data
+                VaultSearchResult(
+                    chunk_text=r["chunk_text"],
+                    pdf_name=r["pdf_name"],
+                    page_number=r["page_number"],
+                    similarity=r["similarity"]
+                ) for r in rpc.data
             ])
     except Exception as e:
         print(f"⚠️ Vector search failed: {e}")
 
     # Fallback
     try:
-        resp = (supabase.table("personal_vault")
-                .select("chunk_text,pdf_name,page_number")
-                .eq("user_id", request.user_id)
-                .full_text_search("chunk_text", request.query)
-                .limit(5).execute())
+        resp = (
+            supabase.table("personal_vault")
+            .select("chunk_text,pdf_name,page_number")
+            .eq("user_id", request.user_id)
+            .full_text_search("chunk_text", request.query)
+            .limit(3)
+            .execute()
+        )
         if resp.data:
             return SearchVaultResponse(results=[
                 VaultSearchResult(
@@ -580,22 +643,31 @@ async def search_vault(request: SearchVaultRequest):
         raise HTTPException(503, f"Search unavailable: {str(e)[:100]}")
 
 # ---------------------------------------------------------------------------
-# AI Query — PRIMARY KEY — FIXED: tokens 4096, complete answers
+# AI Query — Speed optimized with per-mode tokens
 # ---------------------------------------------------------------------------
 
 @app.post("/query", response_model=AiQueryResponse)
 async def gemini_query(request: QueryRequest):
     genai.configure(api_key=GEMINI_API_KEY)
-    prompt = build_medical_prompt(request.query, request.mode, request.track)
+
+    # Get token limit for this mode
+    max_tokens = MODE_TOKENS.get(request.mode, 2000)
+
+    prompt = build_medical_prompt(
+        query=request.query,
+        mode=request.mode,
+        track=request.track,
+        context=request.context
+    )
 
     try:
         model = genai.GenerativeModel("models/gemini-2.5-flash")
         response = model.generate_content(
             prompt,
             generation_config={
-                "temperature": 0.7,
+                "temperature": 0.5,
                 "top_p": 0.9,
-                "max_output_tokens": 4096,
+                "max_output_tokens": max_tokens,
             }
         )
         if not response.text:
@@ -620,7 +692,11 @@ async def gemini_query(request: QueryRequest):
             [v for k, v in kws.items() if k in al]
         )) or ["Standard Medical References"]
 
-        return AiQueryResponse(answer=answer, sources=sources, confidence=0.95)
+        return AiQueryResponse(
+            answer=answer,
+            sources=sources,
+            confidence=0.95
+        )
 
     except Exception as e:
         raise HTTPException(500, f"Gemini error: {e}")
@@ -628,7 +704,9 @@ async def gemini_query(request: QueryRequest):
 @app.post("/search")
 async def gemini_ai_search(request: AiQueryRequest):
     return await gemini_query(QueryRequest(
-        query=request.query, mode=request.mode, track=request.track
+        query=request.query,
+        mode=request.mode,
+        track=request.track
     ))
 
 # ---------------------------------------------------------------------------
@@ -638,14 +716,20 @@ async def gemini_ai_search(request: AiQueryRequest):
 @app.post("/query-stream")
 async def gemini_query_stream(request: QueryRequest):
     genai.configure(api_key=GEMINI_API_KEY)
-    prompt = build_medical_prompt(request.query, request.mode, request.track)
+    max_tokens = MODE_TOKENS.get(request.mode, 2000)
+    prompt = build_medical_prompt(
+        request.query, request.mode, request.track
+    )
 
     async def generate():
         try:
             model = genai.GenerativeModel("models/gemini-2.5-flash")
             for chunk in model.generate_content(
                 prompt, stream=True,
-                generation_config={"temperature": 0.7, "max_output_tokens": 4096}
+                generation_config={
+                    "temperature": 0.5,
+                    "max_output_tokens": max_tokens
+                }
             ):
                 if chunk.text:
                     yield chunk.text
@@ -655,7 +739,7 @@ async def gemini_query_stream(request: QueryRequest):
     return StreamingResponse(generate(), media_type="text/plain")
 
 # ---------------------------------------------------------------------------
-# Study Plan — SECONDARY KEY (new_gemini_api_key)
+# Study Plan — SECONDARY KEY
 # ---------------------------------------------------------------------------
 
 @app.post("/generate-study-plan", response_model=StudyPlanResponse)
@@ -683,30 +767,30 @@ async def generate_study_plan(request: StudyPlanRequest):
     subjects = subjects_map.get(request.track, subjects_map["MBBS"])
     weak = ", ".join(request.weak_subjects) or "Not specified"
 
-    day_names = ["Monday","Tuesday","Wednesday",
-                 "Thursday","Friday","Saturday","Sunday"]
+    day_names = ["Monday", "Tuesday", "Wednesday",
+                 "Thursday", "Friday", "Saturday", "Sunday"]
     days_list = [
         {
-            "day": day_names[(date.today()+timedelta(days=i)).weekday()],
-            "date": (date.today()+timedelta(days=i)).strftime("%Y-%m-%d")
+            "day": day_names[(date.today() + timedelta(days=i)).weekday()],
+            "date": (date.today() + timedelta(days=i)).strftime("%Y-%m-%d")
         }
         for i in range(7)
     ]
 
-    prompt = f"""Expert medical education planner.
-Create 7-day study plan. Return ONLY valid JSON.
+    prompt = f"""Medical education planner.
+7-day study plan. ONLY valid JSON output.
 
-STUDENT:
-Exam: {request.target_exam} | Track: {request.track}
-Days left: {days_remaining} | Daily: {request.daily_hours}h
-Weak: {weak} | Subjects: {', '.join(subjects)}
+STUDENT: Exam={request.target_exam}
+Track={request.track} | Days={days_remaining}
+Hours/day={request.daily_hours}
+Weak={weak}
+Subjects={', '.join(subjects)}
+Days={json.dumps(days_list)}
 
-DAYS: {json.dumps(days_list)}
+RULES: More time weak subjects.
+Tasks 45-90min. Mix subjects daily.
 
-RULES: More time for weak subjects. 45-90 min tasks.
-Mix subjects. {request.daily_hours}h per day total.
-
-RETURN THIS JSON ONLY:
+JSON:
 {{
   "plan": [
     {{
@@ -725,18 +809,21 @@ RETURN THIS JSON ONLY:
       ]
     }}
   ],
-  "weekly_subject_split": {{"Anatomy": 22, "Physiology": 18}},
-  "ai_insight": "Personalized insight based on weak subjects",
+  "weekly_subject_split": {{"Anatomy": 22}},
+  "ai_insight": "Insight here",
   "total_days_remaining": {days_remaining}
 }}
 
-Generate ALL 7 days. ONLY JSON output."""
+ALL 7 days. ONLY JSON."""
 
     try:
         model = genai.GenerativeModel("models/gemini-2.5-flash")
         resp = model.generate_content(
             prompt,
-            generation_config={"temperature": 0.3, "max_output_tokens": 4096}
+            generation_config={
+                "temperature": 0.3,
+                "max_output_tokens": 4096
+            }
         )
         text = resp.text.strip()
         if "```json" in text:
@@ -770,7 +857,8 @@ async def get_tracks():
         "lovable_modes": [
             "deep-explanation", "quick-summary",
             "mcq-practice", "rapid-recall"
-        ]
+        ],
+        "vault_mode": "vault-answer"
     }
 
 @app.get("/books")
@@ -780,15 +868,14 @@ async def get_books():
 @app.get("/status")
 async def api_status():
     return {
-        "version": "5.0.0",
-        "gemini_query": "primary_key",
-        "gemini_study_plan": "secondary_key (new_gemini_api_key)",
-        "max_tokens": 4096,
-        "timeout": "120s",
-        "truncation_fix": "enabled",
-        "rapid_recall_fix": "enabled",
+        "version": "5.1.0",
+        "vault_answer_mode": "enabled",
+        "speed": "per_mode_tokens",
+        "vault_tokens": 800,
+        "deep_explanation_tokens": 3000,
+        "mcq_tokens": 2000,
         "clinical_guidelines": "enabled",
-        "mcq_all_5": "enforced"
+        "dual_gemini_keys": "enabled"
     }
 
 if __name__ == "__main__":

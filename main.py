@@ -767,39 +767,35 @@ async def generate_study_plan(request: StudyPlanRequest):
     subjects = subjects_map.get(request.track, subjects_map["MBBS"])
     weak = ", ".join(request.weak_subjects) or "None"
 
-    # Simplified days_list — only dates
-    days_list = [
-        (date.today() + timedelta(days=i)).strftime("%Y-%m-%d")
+    # Simplified days_str — compact date format
+    days_str = ", ".join([
+        (date.today() + timedelta(days=i)).strftime("%a %Y-%m-%d")
         for i in range(7)
-    ]
+    ])
 
-    prompt = f"""Generate 7-day study plan in JSON only. No extra text.
+    prompt = f"""Generate 7-day JSON study plan only.
 
 Exam: {request.target_exam}
 Track: {request.track}
-Days remaining: {days_remaining}
+Days: {days_remaining} remaining
 Hours/day: {request.daily_hours}
-Weak areas: {weak}
+Weak: {weak}
 Subjects: {', '.join(subjects)}
-Dates: {json.dumps(days_list)}
+Dates: {days_str}
 
-RULES:
-- 7 days, all different
-- More time for weak areas
-- Tasks 45-90min each
-- Mix subjects daily
+RULES: 7 days different, more time weak areas, 45-90min tasks, mix subjects.
 
-JSON FORMAT ONLY:
+JSON:
 {{
   "plan": [
     {{
       "day": "Monday",
-      "date": "{days_list[0]}",
+      "date": "2026-05-20",
       "total_hours": {request.daily_hours},
       "tasks": [
         {{
           "subject": "Anatomy",
-          "topic": "System topic",
+          "topic": "System",
           "duration_minutes": 90,
           "mode": "deep-explanation",
           "priority": "high",
@@ -809,9 +805,11 @@ JSON FORMAT ONLY:
     }}
   ],
   "weekly_subject_split": {{"Anatomy": 20}},
-  "ai_insight": "Brief insight",
+  "ai_insight": "Insight",
   "total_days_remaining": {days_remaining}
-}}"""
+}}
+
+ONLY JSON. ALL 7 days."""
 
     try:
         model = genai.GenerativeModel("models/gemini-2.5-flash")
@@ -819,7 +817,7 @@ JSON FORMAT ONLY:
             prompt,
             generation_config={
                 "temperature": 0.3,
-                "max_output_tokens": 2048
+                "max_output_tokens": 2000
             }
         )
         text = resp.text.strip()

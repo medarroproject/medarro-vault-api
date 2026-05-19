@@ -767,35 +767,38 @@ async def generate_study_plan(request: StudyPlanRequest):
     subjects = subjects_map.get(request.track, subjects_map["MBBS"])
     weak = ", ".join(request.weak_subjects) or "Not specified"
 
-    day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    days_str = " | ".join([
-        f"{day_names[(date.today() + timedelta(days=i)).weekday()]} "
-        f"{(date.today() + timedelta(days=i)).strftime('%Y-%m-%d')}"
-        for i in range(7)
-    ])
+    # Generate simple 3-day plan to avoid JSON truncation
+    today = date.today()
+    day_names = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
 
-    subj_str = ", ".join(subjects)
+    # Build 3 sample days only
+    sample_days = []
+    for i in range(3):
+        d = today + timedelta(days=i)
+        sample_days.append({
+            "day": day_names[d.weekday()],
+            "date": d.strftime("%Y-%m-%d")
+        })
 
-    prompt = f"""You are a medical study planner.
-Create a 7-day plan. Return ONLY JSON.
+    subj_list = subjects[:4]  # Max 4 subjects
+    subj_str = ", ".join(subj_list)
 
-Track: {request.track}
-Exam: {request.target_exam}
-Days left: {days_remaining}
-Hours/day: {request.daily_hours}
-Weak: {weak}
-Subjects: {subj_str}
-Days: {days_str}
+    # Very short prompt to avoid truncation
+    prompt = f"""Medical planner. Return ONLY JSON. No extra text.
 
-Return this JSON structure with 7 days:
-{{"plan":[{{"day":"Mon","date":"2026-05-19","total_hours":{request.daily_hours}.0,"tasks":[{{"subject":"Anatomy","topic":"Topic name","duration_minutes":90,"mode":"deep-explanation","priority":"high","time_slot":"9:00 AM"}}]}}],"weekly_subject_split":{{"Anatomy":25,"Physiology":20,"Pharmacology":20,"Pathology":20,"Biochemistry":15}},"ai_insight":"Focus on weak subjects this week.","total_days_remaining":{days_remaining}}}
+Track:{request.track} Hours:{request.daily_hours} Weak:{weak}
+Subjects:{subj_str}
 
-Rules:
-- More tasks for weak subjects
-- 45-90 min per task
-- Mix subjects each day
-- Return ONLY valid JSON
-- No extra text"""
+Generate plan for these 3 days only:
+Day1: {sample_days[0]['day']} {sample_days[0]['date']}
+Day2: {sample_days[1]['day']} {sample_days[1]['date']}
+Day3: {sample_days[2]['day']} {sample_days[2]['date']}
+
+JSON format (return exactly this structure):
+{{"plan":[{{"day":"{sample_days[0]['day']}","date":"{sample_days[0]['date']}","total_hours":{request.daily_hours}.0,"tasks":[{{"subject":"{subj_list[0]}","topic":"Key Topic 1","duration_minutes":90,"mode":"deep-explanation","priority":"high","time_slot":"9:00 AM"}},{{"subject":"{subj_list[1] if len(subj_list)>1 else subj_list[0]}","topic":"Key Topic 2","duration_minutes":60,"mode":"quick-summary","priority":"medium","time_slot":"11:00 AM"}}]}},{{"day":"{sample_days[1]['day']}","date":"{sample_days[1]['date']}","total_hours":{request.daily_hours}.0,"tasks":[{{"subject":"{subj_list[2] if len(subj_list)>2 else subj_list[0]}","topic":"Key Topic 3","duration_minutes":90,"mode":"deep-explanation","priority":"high","time_slot":"9:00 AM"}},{{"subject":"{subj_list[0]}","topic":"Key Topic 4","duration_minutes":60,"mode":"rapid-recall","priority":"medium","time_slot":"11:00 AM"}}]}},{{"day":"{sample_days[2]['day']}","date":"{sample_days[2]['date']}","total_hours":{request.daily_hours}.0,"tasks":[{{"subject":"{subj_list[1] if len(subj_list)>1 else subj_list[0]}","topic":"Key Topic 5","duration_minutes":90,"mode":"mcq-practice","priority":"high","time_slot":"9:00 AM"}},{{"subject":"{subj_list[2] if len(subj_list)>2 else subj_list[0]}","topic":"Key Topic 6","duration_minutes":60,"mode":"quick-summary","priority":"medium","time_slot":"11:00 AM"}}]}}],"weekly_subject_split":{{"{subj_list[0]}":30,"{subj_list[1] if len(subj_list)>1 else subj_list[0]}":25,"{subj_list[2] if len(subj_list)>2 else subj_list[0]}":25,"{subj_list[3] if len(subj_list)>3 else subj_list[0]}":20}},"ai_insight":"Focus on {weak} this week. Consistent daily practice is key.","total_days_remaining":{days_remaining}}}
+
+Replace all "Key Topic X" with real {request.track} topics.
+Return ONLY the JSON. No other text."""
 
     try:
         model = genai.GenerativeModel("models/gemini-2.5-flash")
@@ -803,7 +806,7 @@ Rules:
             prompt,
             generation_config={
                 "temperature": 0.1,
-                "max_output_tokens": 3000
+                "max_output_tokens": 2000
             }
         )
         text = resp.text.strip()

@@ -765,42 +765,41 @@ async def generate_study_plan(request: StudyPlanRequest):
                  "Anatomy", "Physiology"]
     }
     subjects = subjects_map.get(request.track, subjects_map["MBBS"])
-    weak = ", ".join(request.weak_subjects) or "Not specified"
+    weak = ", ".join(request.weak_subjects) or "None"
 
-    day_names = ["Monday", "Tuesday", "Wednesday",
-                 "Thursday", "Friday", "Saturday", "Sunday"]
+    # Simplified days_list — only dates
     days_list = [
-        {
-            "day": day_names[(date.today() + timedelta(days=i)).weekday()],
-            "date": (date.today() + timedelta(days=i)).strftime("%Y-%m-%d")
-        }
+        (date.today() + timedelta(days=i)).strftime("%Y-%m-%d")
         for i in range(7)
     ]
 
-    prompt = f"""Medical education planner.
-7-day study plan. ONLY valid JSON output.
+    prompt = f"""Generate 7-day study plan in JSON only. No extra text.
 
-STUDENT: Exam={request.target_exam}
-Track={request.track} | Days={days_remaining}
-Hours/day={request.daily_hours}
-Weak={weak}
-Subjects={', '.join(subjects)}
-Days={json.dumps(days_list)}
+Exam: {request.target_exam}
+Track: {request.track}
+Days remaining: {days_remaining}
+Hours/day: {request.daily_hours}
+Weak areas: {weak}
+Subjects: {', '.join(subjects)}
+Dates: {json.dumps(days_list)}
 
-RULES: More time weak subjects.
-Tasks 45-90min. Mix subjects daily.
+RULES:
+- 7 days, all different
+- More time for weak areas
+- Tasks 45-90min each
+- Mix subjects daily
 
-JSON:
+JSON FORMAT ONLY:
 {{
   "plan": [
     {{
       "day": "Monday",
-      "date": "2026-05-18",
-      "total_hours": {request.daily_hours}.0,
+      "date": "{days_list[0]}",
+      "total_hours": {request.daily_hours},
       "tasks": [
         {{
           "subject": "Anatomy",
-          "topic": "Brachial Plexus",
+          "topic": "System topic",
           "duration_minutes": 90,
           "mode": "deep-explanation",
           "priority": "high",
@@ -809,12 +808,10 @@ JSON:
       ]
     }}
   ],
-  "weekly_subject_split": {{"Anatomy": 22}},
-  "ai_insight": "Insight here",
+  "weekly_subject_split": {{"Anatomy": 20}},
+  "ai_insight": "Brief insight",
   "total_days_remaining": {days_remaining}
-}}
-
-ALL 7 days. ONLY JSON."""
+}}"""
 
     try:
         model = genai.GenerativeModel("models/gemini-2.5-flash")
@@ -822,7 +819,7 @@ ALL 7 days. ONLY JSON."""
             prompt,
             generation_config={
                 "temperature": 0.3,
-                "max_output_tokens": 4096
+                "max_output_tokens": 2048
             }
         )
         text = resp.text.strip()

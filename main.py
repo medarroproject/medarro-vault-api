@@ -765,59 +765,45 @@ async def generate_study_plan(request: StudyPlanRequest):
                  "Anatomy", "Physiology"]
     }
     subjects = subjects_map.get(request.track, subjects_map["MBBS"])
-    weak = ", ".join(request.weak_subjects) or "None"
+    weak = ", ".join(request.weak_subjects) or "Not specified"
 
-    # Simplified days_str — compact date format
-    days_str = ", ".join([
-        (date.today() + timedelta(days=i)).strftime("%a %Y-%m-%d")
+    day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    days_str = " | ".join([
+        f"{day_names[(date.today() + timedelta(days=i)).weekday()]} "
+        f"{(date.today() + timedelta(days=i)).strftime('%Y-%m-%d')}"
         for i in range(7)
     ])
 
-    prompt = f"""Generate 7-day JSON study plan only.
+    subj_str = ", ".join(subjects)
 
-Exam: {request.target_exam}
+    prompt = f"""You are a medical study planner.
+Create a 7-day plan. Return ONLY JSON.
+
 Track: {request.track}
-Days: {days_remaining} remaining
+Exam: {request.target_exam}
+Days left: {days_remaining}
 Hours/day: {request.daily_hours}
 Weak: {weak}
-Subjects: {', '.join(subjects)}
-Dates: {days_str}
+Subjects: {subj_str}
+Days: {days_str}
 
-RULES: 7 days different, more time weak areas, 45-90min tasks, mix subjects.
+Return this JSON structure with 7 days:
+{{"plan":[{{"day":"Mon","date":"2026-05-19","total_hours":{request.daily_hours}.0,"tasks":[{{"subject":"Anatomy","topic":"Topic name","duration_minutes":90,"mode":"deep-explanation","priority":"high","time_slot":"9:00 AM"}}]}}],"weekly_subject_split":{{"Anatomy":25,"Physiology":20,"Pharmacology":20,"Pathology":20,"Biochemistry":15}},"ai_insight":"Focus on weak subjects this week.","total_days_remaining":{days_remaining}}}
 
-JSON:
-{{
-  "plan": [
-    {{
-      "day": "Monday",
-      "date": "2026-05-20",
-      "total_hours": {request.daily_hours},
-      "tasks": [
-        {{
-          "subject": "Anatomy",
-          "topic": "System",
-          "duration_minutes": 90,
-          "mode": "deep-explanation",
-          "priority": "high",
-          "time_slot": "9:00 AM"
-        }}
-      ]
-    }}
-  ],
-  "weekly_subject_split": {{"Anatomy": 20}},
-  "ai_insight": "Insight",
-  "total_days_remaining": {days_remaining}
-}}
-
-ONLY JSON. ALL 7 days."""
+Rules:
+- More tasks for weak subjects
+- 45-90 min per task
+- Mix subjects each day
+- Return ONLY valid JSON
+- No extra text"""
 
     try:
         model = genai.GenerativeModel("models/gemini-2.5-flash")
         resp = model.generate_content(
             prompt,
             generation_config={
-                "temperature": 0.3,
-                "max_output_tokens": 2000
+                "temperature": 0.1,
+                "max_output_tokens": 3000
             }
         )
         text = resp.text.strip()
@@ -875,4 +861,4 @@ async def api_status():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, timeout_keep_alive=90)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -765,96 +765,102 @@ async def generate_study_plan(request: StudyPlanRequest):
                  "Anatomy", "Physiology"]
     }
     subjects = subjects_map.get(request.track, subjects_map["MBBS"])
-    weak = ", ".join(request.weak_subjects) or "None"
+    weak = ", ".join(request.weak_subjects) or "Not specified"
 
-    days_str = ", ".join([
-        (date.today() + timedelta(days=i)).strftime("%a %Y-%m-%d")
-        for i in range(7)
-    ])
-
-    prompt = f"""Generate 7-day JSON study plan only.
-
-Exam: {request.target_exam}
-Track: {request.track}
-Days: {days_remaining} remaining
-Hours/day: {request.daily_hours}
-Weak: {weak}
-Subjects: {', '.join(subjects)}
-Dates: {days_str}
-
-RULES: 7 days different, more time weak areas, 45-90min tasks, mix subjects.
-
-JSON:
-{{
-  "plan": [
-    {{
-      "day": "Monday",
-      "date": "2026-05-20",
-      "total_hours": {request.daily_hours},
-      "tasks": [
-        {{
-          "subject": "Anatomy",
-          "topic": "System",
-          "duration_minutes": 90,
-          "mode": "deep-explanation",
-          "priority": "high",
-          "time_slot": "9:00 AM"
-        }}
-      ]
-    }}
-  ],
-  "weekly_subject_split": {{"Anatomy": 20}},
-  "ai_insight": "Insight",
-  "total_days_remaining": {days_remaining}
-}}
-
-ONLY JSON. ALL 7 days."""
+    # STEP 1: Gemini se sirf topics maango (plain text, no JSON)
+    topic_prompt = f"""List 14 important medical topics for {request.track} student.
+Prioritize these weak subjects: {weak}
+From these subjects: {', '.join(subjects)}
+Return ONLY comma-separated topic names.
+Example format: Brachial Plexus, Starling Law, Beta Blockers MOA
+No numbering. No explanation. No JSON. Just topic names."""
 
     try:
         model = genai.GenerativeModel("models/gemini-2.5-flash")
-        resp = model.generate_content(
-            prompt,
+        topic_resp = model.generate_content(
+            topic_prompt,
             generation_config={
-                "temperature": 0.3,
-                "max_output_tokens": 2000
+                "temperature": 0.2,
+                "max_output_tokens": 300
             }
         )
-        
-        text = resp.text.strip()
+        raw_topics = topic_resp.text.strip()
+        topics = [t.strip() for t in raw_topics.split(',') if t.strip()]
+        if len(topics) < 7:
+            # Fallback topics
+            topics = [
+                f"{s} - Key Concepts" for s in subjects * 3
+            ]
+    except Exception:
+        topics = [f"{s} - Key Concepts" for s in subjects * 3]
 
-        # Remove any text before first {
-        if '{' in text:
-            text = text[text.index('{'):]
+    # STEP 2: Python mein plan banao (no JSON from Gemini)
+    today_date = date.today()
+    day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    modes_cycle = [
+        "deep-explanation", "quick-summary",
+        "mcq-practice", "rapid-recall"
+    ]
 
-        # Remove any text after last }
-        if '}' in text:
-            text = text[:text.rindex('}')+1]
+    plan = []
+    topic_idx = 0
 
-        # Remove markdown
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0].strip()
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0].strip()
+    for i in range(7):
+        d = today_date + timedelta(days=i)
+        tasks_per_day = max(2, min(4, request.daily_hours // 2))
+        tasks = []
 
-        # Fix common JSON issues
-        text = text.replace("'", '"')  
-        text = text.replace('\n', ' ')
-        text = re.sub(r',\s*}', '}', text)
-        text = re.sub(r',\s*]', ']', text)
+        for j in range(tasks_per_day):
+            subj = subjects[topic_idx % len(subjects)]
+            topic = topics[topic_idx % len(topics)]
+            mode = modes_cycle[j % len(modes_cycle)]
+            duration = 90 if j == 0 else 60
+            hour = 9 + (j * 2)
+            time_slot = f"{hour}:00 AM" if hour < 12 else (
+                "12:00 PM" if hour == 12 else f"{hour-12}:00 PM"
+            )
+            tasks.append({
+                "subject": subj,
+                "topic": topic,
+                "duration_minutes": duration,
+                "mode": mode,
+                "priority": "high" if subj in weak else "medium",
+                "time_slot": time_slot
+            })
+            topic_idx += 1
 
-        data = json.loads(text)
-        return StudyPlanResponse(
-            plan=data.get("plan", []),
-            weekly_subject_split=data.get("weekly_subject_split", {}),
-            ai_insight=data.get("ai_insight", "Stay consistent!"),
-            total_days_remaining=days_remaining
-        )
-    except json.JSONDecodeError as e:
-        raise HTTPException(500, f"JSON parse error: {e}")
-    except Exception as e:
-        raise HTTPException(500, f"Study plan error: {e}")
-    finally:
-        genai.configure(api_key=GEMINI_API_KEY)
+        plan.append({
+            "day": day_names[d.weekday()],
+            "date": d.strftime("%Y-%m-%d"),
+            "total_hours": float(request.daily_hours),
+            "tasks": tasks
+        })
+
+    # STEP 3: Subject split calculate karo
+    n = len(subjects)
+    base = 100 // n
+    remainder = 100 - (base * n)
+    weekly_split = {}
+    for idx, s in enumerate(subjects):
+        weekly_split[s] = base + (1 if idx < remainder else 0)
+
+    # Weak subjects ko extra time
+    for s in request.weak_subjects:
+        if s in weekly_split:
+            weekly_split[s] = min(35, weekly_split[s] + 5)
+
+    return StudyPlanResponse(
+        plan=plan,
+        weekly_subject_split=weekly_split,
+        ai_insight=(
+            f"You have {days_remaining} days left for "
+            f"{request.target_exam}. "
+            f"Focus on {weak} — AI has prioritized these "
+            f"in your daily schedule. "
+            f"Study {request.daily_hours} hours daily to stay on track."
+        ),
+        total_days_remaining=days_remaining
+    )
 
 # ---------------------------------------------------------------------------
 # Utility

@@ -538,6 +538,9 @@ async def health_check():
         status["warnings"].append(f"Primary: {str(e)[:60]}")
 
     try:
+        genai.configure(api_key=GEMINI_API_KEY)
+# STEP 1: Topics generate karo
+topic_resp = model.generate_content(...)
         genai.configure(api_key=GEMINI_STUDY_PLAN_KEY)
         m2 = genai.GenerativeModel("models/gemini-2.5-flash")
         r2 = m2.generate_content("Say OK")

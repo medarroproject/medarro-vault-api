@@ -746,7 +746,8 @@ async def gemini_query_stream(request: QueryRequest):
 @app.post("/generate-study-plan", response_model=StudyPlanResponse)
 async def generate_study_plan(request: StudyPlanRequest):
 
-    genai.configure(api_key=GEMINI_STUDY_PLAN_KEY)
+    # Use primary key for topics (more reliable)
+genai.configure(api_key=GEMINI_API_KEY)
 
     try:
         days_remaining = (

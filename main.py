@@ -769,6 +769,7 @@ async def generate_study_plan(request: StudyPlanRequest):
     weak = ", ".join(request.weak_subjects) or "Not specified"
 
     # STEP 1: Gemini se sirf topics maango (plain text, no JSON)
+    genai.configure(api_key=GEMINI_API_KEY)
     topic_prompt = f"""List 14 important medical topics for {request.track} student.
 Prioritize these weak subjects: {weak}
 From these subjects: {', '.join(subjects)}

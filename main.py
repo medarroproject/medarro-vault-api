@@ -4,7 +4,7 @@ from typing import List
 import re
 from datetime import datetime, date, timedelta
 
-import fitz  # PyMuPDF
+import fitz
 import httpx
 import google.generativeai as genai
 from fastapi import FastAPI, HTTPException
@@ -18,30 +18,27 @@ from fastembed import TextEmbedding
 load_dotenv()
 
 # ---------------------------------------------------------------------------
-# TWO GEMINI KEYS
-# GEMINI_API_KEY     → AI queries
-# new_gemini_api_key → Study plan
+# KEYS
 # ---------------------------------------------------------------------------
-
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_STUDY_PLAN_KEY = os.getenv("new_gemini_api_key")
 
 if not GEMINI_API_KEY:
-    raise ValueError("❌ GEMINI_API_KEY required")
+    raise ValueError("GEMINI_API_KEY required")
 if not GEMINI_STUDY_PLAN_KEY:
-    raise ValueError("❌ new_gemini_api_key required")
+    raise ValueError("new_gemini_api_key required")
 
 try:
     genai.configure(api_key=GEMINI_API_KEY)
-    print("✅ Primary Gemini configured")
+    print("✅ Gemini configured")
 except Exception as e:
-    raise RuntimeError(f"❌ Gemini config error: {e}")
+    raise RuntimeError(f"Gemini error: {e}")
 
 try:
     st_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
-    print("✅ FastEmbed loaded (384 dims)")
+    print("✅ FastEmbed loaded")
 except Exception as e:
-    raise RuntimeError(f"❌ FastEmbed error: {e}")
+    raise RuntimeError(f"FastEmbed error: {e}")
 
 supabase: Client = create_client(
     os.getenv("SUPABASE_URL"),
@@ -51,22 +48,11 @@ supabase: Client = create_client(
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
-
-app = FastAPI(
-    title="Medarro API",
-    description="AI-powered medical education backend.",
-    version="5.1.0",
-)
+app = FastAPI(title="Medarro API", version="6.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "*",
-        "http://localhost:5173",
-        "http://localhost:3000",
-        "https://*.lovable.app",
-        "https://*.vercel.app",
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -75,7 +61,6 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
-
 class UploadPDFRequest(BaseModel):
     user_id: str
     pdf_url: str
@@ -113,7 +98,7 @@ class QueryRequest(BaseModel):
     query: str
     mode: str = "deep-explanation"
     track: str = "NEET"
-    context: str = ""  # For vault answers
+    context: str = ""
 
 class StudyPlanRequest(BaseModel):
     user_id: str
@@ -147,7 +132,6 @@ class StudyPlanResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # PDF Helpers
 # ---------------------------------------------------------------------------
-
 CHUNK_WORDS = 500
 OVERLAP_WORDS = 100
 
@@ -161,7 +145,7 @@ def extract_pages(pdf_bytes: bytes) -> List[dict]:
                 pages.append({"page_number": i + 1, "text": text})
         doc.close()
     except Exception as e:
-        print(f"❌ PDF extract error: {e}")
+        print(f"PDF error: {e}")
         raise
     return pages
 
@@ -192,15 +176,13 @@ def get_embedding(text: str) -> List[float]:
         raise HTTPException(503, f"Embedding error: {e}")
 
 async def download_pdf(url: str) -> bytes:
-    async with httpx.AsyncClient(
-        timeout=120.0, follow_redirects=True
-    ) as c:
+    async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as c:
         r = await c.get(url)
         if r.status_code != 200:
             raise HTTPException(400, f"PDF download failed: {r.status_code}")
         return r.content
 
-def clean_markdown(text: str) -> str:
+def clean_text(text: str) -> str:
     text = re.sub(r'^#+\s+', '', text, flags=re.MULTILINE)
     text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
     text = re.sub(r'\*(.+?)\*', r'\1', text)
@@ -209,343 +191,202 @@ def clean_markdown(text: str) -> str:
     return '\n'.join(l.strip() for l in text.split('\n')).strip()
 
 # ---------------------------------------------------------------------------
-# Medical Books
+# Medical Data
 # ---------------------------------------------------------------------------
-
 MEDICAL_BOOKS = {
-    "NEET": [
-        "NCERT Biology Class 11 & 12",
-        "Trueman's Objective Biology",
-        "DC Pandey Physics",
-        "Physical Chemistry - OP Tandon"
-    ],
-    "MBBS": [
-        "Gray's Anatomy (Latest Edition)",
-        "Guyton & Hall Physiology",
-        "Robbins & Cotran Pathology",
-        "BD Chaurasia's Human Anatomy",
-        "Harrison's Principles of Internal Medicine",
-        "KD Tripathi Pharmacology"
-    ],
-    "BDS": [
-        "Shafer's Textbook of Oral Pathology",
-        "Gray's Anatomy",
-        "Dental Pharmacology",
-        "Guyton & Hall Physiology"
-    ],
-    "BHMS": [
-        "Boericke's Materia Medica",
-        "Organon of Medicine",
-        "Gray's Anatomy",
-        "Guyton Physiology"
-    ]
+    "NEET": ["NCERT Biology 11&12", "Trueman Biology", "DC Pandey Physics", "OP Tandon Chemistry"],
+    "MBBS": ["Gray's Anatomy", "Guyton Physiology", "Robbins Pathology", "BD Chaurasia Anatomy", "Harrison's Medicine", "KD Tripathi Pharmacology"],
+    "BDS": ["Shafer's Oral Pathology", "Gray's Anatomy", "Dental Pharmacology", "Guyton Physiology"],
+    "BHMS": ["Boericke Materia Medica", "Organon of Medicine", "Gray's Anatomy", "Guyton Physiology"]
 }
 
-# ---------------------------------------------------------------------------
-# Clinical Guidelines
-# ---------------------------------------------------------------------------
-
-CLINICAL_GUIDELINES = """
-MANDATORY CLINICAL GUIDELINES:
-- TB: WHO 2022 — HRZE 2mo + HR 4mo
-  H=Isoniazid 5mg/kg, R=Rifampicin 10mg/kg
-  Z=Pyrazinamide 25mg/kg, E=Ethambutol 15mg/kg
-- DM Type 2: ICMR 2025 — Metformin first, HbA1c <7%
-- HTN: JNC 8 — <140/90, <130/80 DM/CKD
-- DKA: NS 15-20ml/kg/hr, Insulin 0.1U/kg/hr
-- Malaria: P.vivax=Chloroquine+Primaquine 14d
-  P.falciparum=ACT Artesunate-Lumefantrine
-"""
+CLINICAL_GUIDELINES = """KEY GUIDELINES:
+TB: WHO 2022 HRZE — H=5mg/kg R=10mg/kg Z=25mg/kg E=15mg/kg (2mo HRZE + 4mo HR)
+DM2: ICMR 2025 Metformin first, HbA1c<7%
+HTN: JNC8 <140/90, <130/80 DM/CKD
+DKA: NS 15-20ml/kg/hr + Insulin 0.1U/kg/hr + K+ if <3.5
+Malaria: Vivax=CQ+Primaquine14d, Falciparum=ACT"""
 
 # ---------------------------------------------------------------------------
-# Mode Instructions
+# SMART PROMPTS — Concise but Complete
+# Key insight: Shorter prompts = faster response + more tokens for answer
 # ---------------------------------------------------------------------------
 
-MODE_INSTRUCTIONS = {
+def build_prompt(query: str, mode: str, track: str, context: str = "") -> str:
 
-    # ── Vault Answer Mode — NEW ─────────────────────────────────────────────
-    "vault-answer": """
-You are a MBBS topper sharing notes with a friend.
-Be concise, exam-focused, natural language.
-Max 300 words total. No paragraphs. No textbook language.
+    ctx = f"\nUSE THIS CONTEXT (from student notes):\n{context[:800]}\n" if context else ""
 
-FORMAT EXACTLY — ALL sections required:
+    if mode == "vault-answer":
+        return f"""You are a {track} topper. Answer like revision notes. Max 250 words.
+{ctx}
+FORMAT (all sections required):
+ANSWER: [2 lines direct answer]
+KEY POINTS: 1. 2. 3. 4. 5.
+PEARL: [1 clinical insight]
+MNEMONIC: [if useful]
+EXAM TIP: [how asked in exams]
+RECALL: [1 line summary]
 
-FINAL ANSWER:
-[2-3 lines. Direct answer only. Natural language.]
+Q: {query}"""
 
-HIGH-YIELD POINTS:
-1. [Exam-relevant point]
-2. [Exam-relevant point]
-3. [Exam-relevant point]
-4. [Exam-relevant point]
-5. [Exam-relevant point]
+    if mode == "quick-summary":
+        return f"""You are a {track} expert. Quick revision notes. Max 180 words.
+{ctx}
+KEY FACTS: (7 bullets, max 12 words each)
+MNEMONIC: [one mnemonic]
+TREATMENT: [key drug+dose]
+MUST KNOW: [#1 fact]
 
-CLINICAL PEARL:
-[One practical clinical insight. 1-2 lines max.]
+Q: {query}"""
 
-MNEMONIC:
-[Easy mnemonic if applicable. Skip if not relevant.]
+    if mode == "mcq-practice":
+        return f"""Generate 5 MCQs on this topic for {track} exam.
+{ctx}
+Format ALL 5 exactly like this:
+Q1. [question]
+A.[opt] B.[opt] C.[opt] D.[opt]
+Ans: [letter]. [why correct, why others wrong]
 
-VIVA/PYQ POINT:
-[Exactly how this is asked in exams. 1 line.]
+Q2. [question]
+A.[opt] B.[opt] C.[opt] D.[opt]
+Ans: [letter]. [explanation]
 
-ONE-LINE RECALL:
-[Single sentence. Most important thing to remember.]
+Q3. [question]
+A.[opt] B.[opt] C.[opt] D.[opt]
+Ans: [letter]. [explanation]
 
-RULES:
-- Max 300 words
-- Topper notes style
-- No academic wording
-- Exam focused only
-- Complete all sections
-""",
+Q4. [question]
+A.[opt] B.[opt] C.[opt] D.[opt]
+Ans: [letter]. [explanation]
 
-    # ── AI Study Workspace Modes ────────────────────────────────────────────
+Q5. [question]
+A.[opt] B.[opt] C.[opt] D.[opt]
+Ans: [letter]. [explanation]
 
-    "deep-explanation": """
-COMPLETE answer in ALL 6 sections. Never truncate.
+Topic: {query}
+Make them high-yield, {track} exam standard."""
 
-1. DEFINITION: One precise line.
+    if mode == "rapid-recall":
+        return f"""Rapid recall for {track} student. Complete all sections.
+{ctx}
+DEF: [1 line]
+LIST: 1. 2. 3. 4. 5. (complete list, no truncation)
+KEY: • • • • •
+MNEMONIC: [easy one]
+FLOW: A→B→C→D
+TREATMENT: [drug+dose+duration]
+EXAM: [how it appears in {track} exam]
+RECALL: [#1 thing to remember]
 
-2. MECHANISM / PATHOPHYSIOLOGY:
-Complete step-by-step mechanism.
-Include all pathway components.
+Topic: {query}"""
 
-3. CLINICAL FEATURES:
-Signs, symptoms, investigations with values.
-
-4. TREATMENT PROTOCOL:
-Drug names + doses + duration.
-Follow WHO/ICMR/Indian guidelines.
-
-5. CLINICAL PEARLS:
-Key exam points, differentials, mnemonics.
-
-6. REFERENCE: Textbook + chapter.
-
-Write until ALL 6 sections complete.
-""",
-
-    "quick-summary": """
-COMPLETE all sections. Max 200 words.
-
-KEY FACTS:
-- [Fact 1 - max 15 words]
-- [Fact 2]
-- [Fact 3]
-- [Fact 4]
-- [Fact 5]
-- [Fact 6]
-- [Fact 7]
-
-MNEMONIC: [One easy mnemonic]
-
-TREATMENT: [Key drug + dose in 1 line]
-
-MUST REMEMBER: [#1 high yield fact]
-""",
-
-    "mcq-practice": """
-Generate EXACTLY 5 MCQs. Complete ALL 5.
-NEET/MBBS exam pattern.
-
-Q1. [Question]
-A. [Option]
-B. [Option]
-C. [Option]
-D. [Option]
-Answer: [Letter]
-Explanation: [Correct + why others wrong]
-
-Q2. [Question]
-A. [Option]
-B. [Option]
-C. [Option]
-D. [Option]
-Answer: [Letter]
-Explanation: [Correct + why others wrong]
-
-Q3. [Question]
-A. [Option]
-B. [Option]
-C. [Option]
-D. [Option]
-Answer: [Letter]
-Explanation: [Correct + why others wrong]
-
-Q4. [Question]
-A. [Option]
-B. [Option]
-C. [Option]
-D. [Option]
-Answer: [Letter]
-Explanation: [Correct + why others wrong]
-
-Q5. [Question]
-A. [Option]
-B. [Option]
-C. [Option]
-D. [Option]
-Answer: [Letter]
-Explanation: [Correct + why others wrong]
-
-High yield. Clinical scenarios included.
-WHO/ICMR/NCERT based.
-""",
-
-    "rapid-recall": """
-Complete ALL sections. No truncation.
-If LIST asked — give COMPLETE list.
-
-DEFINITION: [1 precise line]
-
-COMPLETE LIST / CLASSIFICATION:
-1. [Item 1]
-2. [Item 2]
-3. [Item 3]
-4. [Item 4]
-5. [Item 5]
-(Continue until complete)
-
-KEY POINTS:
-- [Point 1]
-- [Point 2]
-- [Point 3]
-- [Point 4]
-- [Point 5]
-
-MNEMONIC: [Easy mnemonic]
-
-FLOWCHART:
-[Step 1] → [Step 2] → [Step 3] → [Step 4]
-
-TREATMENT: [Drug + Dose + Duration]
-
-EXAM TIP: [How asked in NEET/MBBS]
-
-HIGH YIELD FACT: [#1 to remember]
-""",
-
-    # ── Legacy ──────────────────────────────────────────────────────────────
-    "explanation": "Thorough explanation: definition, mechanism, treatment.",
-    "exam": "Concise exam answer with key points and treatment.",
-    "revision": "Bullet point revision notes with mnemonics.",
-    "notes": "Detailed notes with subtopics and clinical correlations.",
-    "deep-dive": "Research-level: mechanisms, guidelines, landmark studies."
-}
-
-# ---------------------------------------------------------------------------
-# Token limits per mode — Speed optimization
-# ---------------------------------------------------------------------------
-
-MODE_TOKENS = {
-    "vault-answer": 1200,      # Fast — short format
-    "quick-summary": 1200,    # Medium
-    "rapid-recall": 1800,     # Medium
-    "mcq-practice": 2000,     # Needs 5 MCQs
-    "deep-explanation": 3000, # Full explanation
-    "explanation": 2000,
-    "exam": 1000,
-    "revision": 800,
-    "notes": 2000,
-    "deep-dive": 3000,
-}
-
-# ---------------------------------------------------------------------------
-# Prompt Builder
-# ---------------------------------------------------------------------------
-
-def build_medical_prompt(
-    query: str,
-    mode: str = "deep-explanation",
-    track: str = "NEET",
-    context: str = ""
-) -> str:
-
-    instruction = MODE_INSTRUCTIONS.get(
-        mode, MODE_INSTRUCTIONS["deep-explanation"]
-    )
+    # deep-explanation (default)
     books = MEDICAL_BOOKS.get(track, MEDICAL_BOOKS["MBBS"])
-    books_text = "\n".join(f"- {b}" for b in books)
-
-    # Vault context section
-    context_section = ""
-    if context:
-        context_section = f"""
-CONTEXT FROM STUDENT'S UPLOADED NOTES:
-{context}
-
-Answer based primarily on this context.
-"""
-
-    return f"""You are an expert medical educator for Indian {track} students.
-
-RULES:
-1. ONLY standard medical textbooks
-2. EXACT medical terminology
-3. NEVER truncate — complete ALL sections
-4. Follow Indian medical curriculum
-5. NO Markdown (no ##, **, __)
-6. Plain text ONLY
+    books_str = ", ".join(books[:3])
+    return f"""You are a {track} medical educator. Answer completely. Do NOT stop early.
 {CLINICAL_GUIDELINES}
-STUDENT LEVEL: {track}
-MODE: {mode}
-{context_section}
-FORMAT:
-{instruction}
+{ctx}
+Refs: {books_str}
 
-TEXTBOOKS:
-{books_text}
+Answer this question with ALL 6 sections:
+1. DEFINITION: [precise 1 line]
+2. MECHANISM: [complete pathophysiology, all steps]
+3. CLINICAL FEATURES: [signs, symptoms, investigations+values]
+4. TREATMENT: [drugs+doses+duration, WHO/ICMR guidelines]
+5. PEARLS: [exam points, differentials, mnemonic]
+6. REFERENCE: [textbook+chapter]
 
-QUESTION: {query}
+Q: {query}
 
-Write COMPLETE answer. Do NOT stop early."""
+Write every section completely. Never stop mid-sentence."""
+
+# ---------------------------------------------------------------------------
+# Token limits — Optimized for speed + completeness
+# ---------------------------------------------------------------------------
+MODE_TOKENS = {
+    "vault-answer":     900,
+    "quick-summary":   1000,
+    "rapid-recall":    1500,
+    "mcq-practice":    2000,
+    "deep-explanation": 2500,
+    "explanation":     2000,
+    "exam":            1000,
+    "revision":         800,
+    "notes":           2000,
+    "deep-dive":       2500,
+}
+
+# ---------------------------------------------------------------------------
+# Get best available Gemini model
+# ---------------------------------------------------------------------------
+def get_model(prefer_fast: bool = False) -> genai.GenerativeModel:
+    """Try models in order — use what's available on the API key"""
+    models_to_try = [
+        "models/gemini-1.5-flash",      # Fast, widely available
+        "models/gemini-1.5-flash-8b",   # Fastest, very available
+        "models/gemini-1.5-pro",        # Better quality
+        "models/gemini-2.0-flash-lite", # New fast
+        "models/gemini-2.0-flash",      # New
+        "models/gemini-2.5-flash",      # Thinking model
+    ]
+    if prefer_fast:
+        models_to_try = [
+            "models/gemini-1.5-flash-8b",
+            "models/gemini-1.5-flash",
+            "models/gemini-2.0-flash-lite",
+            "models/gemini-2.0-flash",
+        ]
+    # Return first model name (actual availability tested at runtime)
+    return models_to_try[0]
+
+PRIMARY_MODEL = os.getenv("GEMINI_MODEL", "models/gemini-1.5-flash")
+FAST_MODEL = os.getenv("GEMINI_FAST_MODEL", "models/gemini-1.5-flash-8b")
 
 # ---------------------------------------------------------------------------
 # Health Check
 # ---------------------------------------------------------------------------
-
 @app.get("/health")
 async def health_check():
     status = {
         "status": "ok",
         "service": "Medarro API",
-        "version": "5.1.0",
+        "version": "6.0.0",
+        "primary_model": PRIMARY_MODEL,
+        "fast_model": FAST_MODEL,
         "apis": {
             "gemini_query": "checking",
             "gemini_study_plan": "checking",
             "embeddings": "checking",
             "supabase": "ok"
         },
-        "improvements": {
-            "vault_answer_mode": "added",
-            "speed_optimization": "per_mode_tokens",
-            "vault_format": "topper_notes_style",
-            "truncation_fix": "enabled",
-            "clinical_guidelines": "enabled"
-        },
         "warnings": []
     }
 
-    try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        m = genai.GenerativeModel("models/gemini-2.0-flash")
-        r = m.generate_content("Say OK")
-        status["apis"]["gemini_query"] = "ok" if r.text else "degraded"
-    except Exception as e:
-        status["apis"]["gemini_query"] = "down"
-        status["warnings"].append(f"Primary: {str(e)[:60]}")
+    # Test primary Gemini
+    for model_name in [PRIMARY_MODEL, "models/gemini-1.5-flash", "models/gemini-2.0-flash"]:
+        try:
+            genai.configure(api_key=GEMINI_API_KEY)
+            m = genai.GenerativeModel(model_name)
+            r = m.generate_content("Say OK", generation_config={"max_output_tokens": 10})
+            if r.text:
+                status["apis"]["gemini_query"] = f"ok ({model_name})"
+                status["primary_model"] = model_name
+                break
+        except Exception as e:
+            status["warnings"].append(f"{model_name}: {str(e)[:50]}")
 
-    try:
-        genai.configure(api_key=GEMINI_STUDY_PLAN_KEY)
-        m2 = genai.GenerativeModel("models/gemini-2.0-flash")
-        r2 = m2.generate_content("Say OK")
-        status["apis"]["gemini_study_plan"] = "ok" if r2.text else "degraded"
-        
-    except Exception as e:
-        status["apis"]["gemini_study_plan"] = "down"
-        status["warnings"].append(f"Study plan: {str(e)[:60]}")
+    # Test study plan key
+    for model_name in [FAST_MODEL, "models/gemini-1.5-flash-8b", "models/gemini-1.5-flash"]:
+        try:
+            genai.configure(api_key=GEMINI_STUDY_PLAN_KEY)
+            m2 = genai.GenerativeModel(model_name)
+            r2 = m2.generate_content("Say OK", generation_config={"max_output_tokens": 10})
+            if r2.text:
+                status["apis"]["gemini_study_plan"] = f"ok ({model_name})"
+                status["fast_model"] = model_name
+                break
+        except Exception as e:
+            status["warnings"].append(f"StudyPlan {model_name}: {str(e)[:50]}")
     finally:
         genai.configure(api_key=GEMINI_API_KEY)
 
@@ -554,14 +395,13 @@ async def health_check():
         status["apis"]["embeddings"] = f"ok ({len(emb)} dims)"
     except Exception as e:
         status["apis"]["embeddings"] = "down"
-        status["warnings"].append(f"Embedding: {str(e)[:60]}")
+        status["warnings"].append(f"Embedding: {str(e)[:50]}")
 
     return status
 
 # ---------------------------------------------------------------------------
 # PDF Upload
 # ---------------------------------------------------------------------------
-
 @app.post("/upload-pdf", response_model=UploadPDFResponse)
 async def upload_pdf(request: UploadPDFRequest):
     try:
@@ -598,7 +438,6 @@ async def upload_pdf(request: UploadPDFRequest):
 # ---------------------------------------------------------------------------
 # Vault Search
 # ---------------------------------------------------------------------------
-
 @app.post("/search-vault", response_model=SearchVaultResponse)
 async def search_vault(request: SearchVaultRequest):
     try:
@@ -606,7 +445,7 @@ async def search_vault(request: SearchVaultRequest):
         rpc = supabase.rpc("match_vault_chunks", {
             "query_embedding": qe,
             "match_user_id": request.user_id,
-            "match_count": 3,  # Reduced for speed
+            "match_count": 3,
         }).execute()
         if rpc.data:
             return SearchVaultResponse(results=[
@@ -618,9 +457,8 @@ async def search_vault(request: SearchVaultRequest):
                 ) for r in rpc.data
             ])
     except Exception as e:
-        print(f"⚠️ Vector search failed: {e}")
+        print(f"Vector search failed: {e}")
 
-    # Fallback
     try:
         resp = (
             supabase.table("personal_vault")
@@ -644,63 +482,69 @@ async def search_vault(request: SearchVaultRequest):
         raise HTTPException(503, f"Search unavailable: {str(e)[:100]}")
 
 # ---------------------------------------------------------------------------
-# AI Query — Speed optimized with per-mode tokens
+# AI Query — Smart model fallback
 # ---------------------------------------------------------------------------
-
 @app.post("/query", response_model=AiQueryResponse)
 async def gemini_query(request: QueryRequest):
     genai.configure(api_key=GEMINI_API_KEY)
 
-    # Get token limit for this mode
     max_tokens = MODE_TOKENS.get(request.mode, 2000)
-
-    prompt = build_medical_prompt(
+    prompt = build_prompt(
         query=request.query,
         mode=request.mode,
         track=request.track,
         context=request.context
     )
 
-    try:
-        model = genai.GenerativeModel("models/gemini-2.0-flash")
-        response = model.generate_content(
-            prompt,
-            generation_config={
-                "temperature": 0.5,
-                "top_p": 0.9,
-                "max_output_tokens": max_tokens,
+    # Try models in order
+    models_to_try = [
+        PRIMARY_MODEL,
+        "models/gemini-1.5-flash",
+        "models/gemini-1.5-flash-8b",
+        "models/gemini-2.0-flash",
+        "models/gemini-2.5-flash",
+    ]
+
+    last_error = None
+    for model_name in models_to_try:
+        try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(
+                prompt,
+                generation_config={
+                    "temperature": 0.3,
+                    "max_output_tokens": max_tokens,
+                }
+            )
+            if not response.text:
+                continue
+
+            answer = clean_text(response.text)
+
+            kws = {
+                "gray": "Gray's Anatomy",
+                "guyton": "Guyton & Hall Physiology",
+                "robbins": "Robbins Pathology",
+                "chaurasia": "BD Chaurasia Anatomy",
+                "tripathi": "KD Tripathi Pharmacology",
+                "harrison": "Harrison's Principles",
+                "ncert": "NCERT Biology",
+                "who": "WHO Guidelines",
+                "icmr": "ICMR Guidelines",
             }
-        )
-        if not response.text:
-            raise HTTPException(500, "Empty Gemini response")
+            al = answer.lower()
+            sources = list(dict.fromkeys(
+                [v for k, v in kws.items() if k in al]
+            )) or ["Standard Medical References"]
 
-        answer = clean_markdown(response.text)
+            return AiQueryResponse(answer=answer, sources=sources, confidence=0.95)
 
-        kws = {
-            "gray": "Gray's Anatomy",
-            "guyton": "Guyton & Hall Physiology",
-            "robbins": "Robbins Pathology",
-            "chaurasia": "BD Chaurasia Anatomy",
-            "tripathi": "KD Tripathi Pharmacology",
-            "harrison": "Harrison's Principles",
-            "ncert": "NCERT Biology",
-            "netter": "Netter's Anatomy",
-            "who": "WHO Guidelines",
-            "icmr": "ICMR Guidelines",
-        }
-        al = answer.lower()
-        sources = list(dict.fromkeys(
-            [v for k, v in kws.items() if k in al]
-        )) or ["Standard Medical References"]
+        except Exception as e:
+            last_error = e
+            print(f"Model {model_name} failed: {str(e)[:80]}")
+            continue
 
-        return AiQueryResponse(
-            answer=answer,
-            sources=sources,
-            confidence=0.95
-        )
-
-    except Exception as e:
-        raise HTTPException(500, f"Gemini error: {e}")
+    raise HTTPException(500, f"All models failed. Last error: {last_error}")
 
 @app.post("/search")
 async def gemini_ai_search(request: AiQueryRequest):
@@ -713,40 +557,35 @@ async def gemini_ai_search(request: AiQueryRequest):
 # ---------------------------------------------------------------------------
 # Streaming
 # ---------------------------------------------------------------------------
-
 @app.post("/query-stream")
 async def gemini_query_stream(request: QueryRequest):
     genai.configure(api_key=GEMINI_API_KEY)
     max_tokens = MODE_TOKENS.get(request.mode, 2000)
-    prompt = build_medical_prompt(
-        request.query, request.mode, request.track
-    )
+    prompt = build_prompt(request.query, request.mode, request.track)
 
     async def generate():
-        try:
-            model = genai.GenerativeModel("models/gemini-2.0-flash")
-            for chunk in model.generate_content(
-                prompt, stream=True,
-                generation_config={
-                    "temperature": 0.5,
-                    "max_output_tokens": max_tokens
-                }
-            ):
-                if chunk.text:
-                    yield chunk.text
-        except Exception as e:
-            yield f"Error: {e}"
+        for model_name in [PRIMARY_MODEL, "models/gemini-1.5-flash", "models/gemini-2.0-flash"]:
+            try:
+                model = genai.GenerativeModel(model_name)
+                for chunk in model.generate_content(
+                    prompt, stream=True,
+                    generation_config={"temperature": 0.3, "max_output_tokens": max_tokens}
+                ):
+                    if chunk.text:
+                        yield chunk.text
+                return
+            except Exception as e:
+                print(f"Stream {model_name} failed: {e}")
+                continue
+        yield "Error: All models unavailable"
 
     return StreamingResponse(generate(), media_type="text/plain")
 
 # ---------------------------------------------------------------------------
-# Study Plan — SECONDARY KEY
+# Study Plan — Smart fallback
 # ---------------------------------------------------------------------------
-
 @app.post("/generate-study-plan", response_model=StudyPlanResponse)
 async def generate_study_plan(request: StudyPlanRequest):
-
-    genai.configure(api_key=GEMINI_API_KEY)
 
     try:
         days_remaining = (
@@ -758,51 +597,42 @@ async def generate_study_plan(request: StudyPlanRequest):
 
     subjects_map = {
         "NEET": ["Biology", "Physics", "Chemistry"],
-        "MBBS": ["Anatomy", "Physiology", "Biochemistry",
-                 "Pharmacology", "Pathology", "Microbiology"],
-        "BDS": ["Anatomy", "Physiology", "Biochemistry",
-                "Dental Materials", "Oral Pathology"],
-        "BHMS": ["Organon of Medicine", "Materia Medica",
-                 "Anatomy", "Physiology"]
+        "MBBS": ["Anatomy", "Physiology", "Biochemistry", "Pharmacology", "Pathology", "Microbiology"],
+        "BDS": ["Anatomy", "Physiology", "Biochemistry", "Dental Materials", "Oral Pathology"],
+        "BHMS": ["Organon of Medicine", "Materia Medica", "Anatomy", "Physiology"]
     }
     subjects = subjects_map.get(request.track, subjects_map["MBBS"])
     weak = ", ".join(request.weak_subjects) or "Not specified"
 
-    # STEP 1: Gemini se sirf topics maango (plain text, no JSON)
-    genai.configure(api_key=GEMINI_API_KEY)
-    topic_prompt = f"""List 14 important medical topics for {request.track} student.
-Prioritize these weak subjects: {weak}
-From these subjects: {', '.join(subjects)}
-Return ONLY comma-separated topic names.
-Example format: Brachial Plexus, Starling Law, Beta Blockers MOA
-No numbering. No explanation. No JSON. Just topic names."""
+    # Get topics from Gemini
+    topic_prompt = f"""List 14 {request.track} exam topics. Prioritize: {weak}.
+Subjects: {', '.join(subjects)}.
+Return ONLY comma-separated names. No numbering. No explanation.
+Example: Brachial Plexus, Starling Law, Beta Blockers"""
 
-    try:
-        model = genai.GenerativeModel("models/gemini-2.0-flash")
-        topic_resp = model.generate_content(
-            topic_prompt,
-            generation_config={
-                "temperature": 0.2,
-                "max_output_tokens": 300
-            }
-        )
-        raw_topics = topic_resp.text.strip()
-        topics = [t.strip() for t in raw_topics.split(',') if t.strip()]
-        if len(topics) < 7:
-            # Fallback topics
-            topics = [
-                f"{s} - Key Concepts" for s in subjects * 3
-            ]
-    except Exception:
-        topics = [f"{s} - Key Concepts" for s in subjects * 3]
+    topics = []
+    for model_name in [FAST_MODEL, PRIMARY_MODEL, "models/gemini-1.5-flash-8b", "models/gemini-1.5-flash"]:
+        try:
+            genai.configure(api_key=GEMINI_API_KEY)
+            model = genai.GenerativeModel(model_name)
+            resp = model.generate_content(
+                topic_prompt,
+                generation_config={"temperature": 0.2, "max_output_tokens": 300}
+            )
+            topics = [t.strip() for t in resp.text.strip().split(',') if t.strip()]
+            if len(topics) >= 7:
+                break
+        except Exception as e:
+            print(f"Topics {model_name} failed: {e}")
+            continue
 
-    # STEP 2: Python mein plan banao (no JSON from Gemini)
+    if len(topics) < 7:
+        topics = [f"{s} Key Concepts" for s in subjects * 3]
+
+    # Build plan in Python
     today_date = date.today()
     day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    modes_cycle = [
-        "deep-explanation", "quick-summary",
-        "mcq-practice", "rapid-recall"
-    ]
+    modes_cycle = ["deep-explanation", "quick-summary", "mcq-practice", "rapid-recall"]
 
     plan = []
     topic_idx = 0
@@ -818,9 +648,13 @@ No numbering. No explanation. No JSON. Just topic names."""
             mode = modes_cycle[j % len(modes_cycle)]
             duration = 90 if j == 0 else 60
             hour = 9 + (j * 2)
-            time_slot = f"{hour}:00 AM" if hour < 12 else (
-                "12:00 PM" if hour == 12 else f"{hour-12}:00 PM"
-            )
+            if hour < 12:
+                time_slot = f"{hour}:00 AM"
+            elif hour == 12:
+                time_slot = "12:00 PM"
+            else:
+                time_slot = f"{hour - 12}:00 PM"
+
             tasks.append({
                 "subject": subj,
                 "topic": topic,
@@ -838,28 +672,25 @@ No numbering. No explanation. No JSON. Just topic names."""
             "tasks": tasks
         })
 
-    # STEP 3: Subject split calculate karo
+    # Subject split
     n = len(subjects)
     base = 100 // n
     remainder = 100 - (base * n)
-    weekly_split = {}
-    for idx, s in enumerate(subjects):
-        weekly_split[s] = base + (1 if idx < remainder else 0)
-
-    # Weak subjects ko extra time
+    weekly_split = {s: base + (1 if i < remainder else 0) for i, s in enumerate(subjects)}
     for s in request.weak_subjects:
         if s in weekly_split:
             weekly_split[s] = min(35, weekly_split[s] + 5)
+
+    # Restore primary key
+    genai.configure(api_key=GEMINI_API_KEY)
 
     return StudyPlanResponse(
         plan=plan,
         weekly_subject_split=weekly_split,
         ai_insight=(
-            f"You have {days_remaining} days left for "
-            f"{request.target_exam}. "
-            f"Focus on {weak} — AI has prioritized these "
-            f"in your daily schedule. "
-            f"Study {request.daily_hours} hours daily to stay on track."
+            f"{days_remaining} days left for {request.target_exam}. "
+            f"Focus on {weak}. "
+            f"Study {request.daily_hours}h daily to stay on track."
         ),
         total_days_remaining=days_remaining
     )
@@ -867,36 +698,48 @@ No numbering. No explanation. No JSON. Just topic names."""
 # ---------------------------------------------------------------------------
 # Utility
 # ---------------------------------------------------------------------------
+@app.get("/health-models")
+async def list_available_models():
+    """Test which models are available on current API key"""
+    genai.configure(api_key=GEMINI_API_KEY)
+    models_to_test = [
+        "models/gemini-1.5-flash-8b",
+        "models/gemini-1.5-flash",
+        "models/gemini-1.5-pro",
+        "models/gemini-2.0-flash-lite",
+        "models/gemini-2.0-flash",
+        "models/gemini-2.5-flash",
+    ]
+    results = {}
+    for m in models_to_test:
+        try:
+            model = genai.GenerativeModel(m)
+            r = model.generate_content("Say OK", generation_config={"max_output_tokens": 5})
+            results[m] = "✅ available"
+        except Exception as e:
+            results[m] = f"❌ {str(e)[:60]}"
+    return results
 
 @app.get("/tracks")
 async def get_tracks():
     return {
         "tracks": ["NEET", "MBBS", "BHMS", "BDS", "MD/MS"],
-        "modes": list(MODE_INSTRUCTIONS.keys()),
-        "lovable_modes": [
-            "deep-explanation", "quick-summary",
-            "mcq-practice", "rapid-recall"
-        ],
-        "vault_mode": "vault-answer"
+        "modes": list(MODE_TOKENS.keys()),
+        "version": "6.0.0"
     }
-
-@app.get("/books")
-async def get_books():
-    return MEDICAL_BOOKS
 
 @app.get("/status")
 async def api_status():
     return {
-        "version": "5.1.0",
-        "vault_answer_mode": "enabled",
-        "speed": "per_mode_tokens",
-        "vault_tokens": 800,
-        "deep_explanation_tokens": 3000,
-        "mcq_tokens": 2000,
-        "clinical_guidelines": "enabled",
-        "dual_gemini_keys": "enabled"
+        "version": "6.0.0",
+        "primary_model": PRIMARY_MODEL,
+        "fast_model": FAST_MODEL,
+        "model_fallback": "enabled",
+        "smart_prompts": "enabled",
+        "token_optimized": "enabled",
+        "study_plan": "python_generated"
     }
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, timeout_keep_alive=90)
+    uvicorn.run(app, host="0.0.0.0", port=8000, timeout_keep_alive=120)

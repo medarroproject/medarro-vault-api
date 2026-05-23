@@ -440,9 +440,9 @@ HIGH YIELD FACT: [#1 to remember]
 # ---------------------------------------------------------------------------
 
 MODE_TOKENS = {
-    "vault-answer": 800,      # Fast — short format
-    "quick-summary": 1000,    # Medium
-    "rapid-recall": 1200,     # Medium
+    "vault-answer": 1200,      # Fast — short format
+    "quick-summary": 1200,    # Medium
+    "rapid-recall": 1800,     # Medium
     "mcq-practice": 2000,     # Needs 5 MCQs
     "deep-explanation": 3000, # Full explanation
     "explanation": 2000,

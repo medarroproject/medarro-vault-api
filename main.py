@@ -530,7 +530,7 @@ async def health_check():
 
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        m = genai.GenerativeModel("models/gemini-2.5-flash")
+        m = genai.GenerativeModel("models/gemini-2.0-flash")
         r = m.generate_content("Say OK")
         status["apis"]["gemini_query"] = "ok" if r.text else "degraded"
     except Exception as e:
@@ -539,7 +539,7 @@ async def health_check():
 
     try:
         genai.configure(api_key=GEMINI_STUDY_PLAN_KEY)
-        m2 = genai.GenerativeModel("models/gemini-2.5-flash")
+        m2 = genai.GenerativeModel("models/gemini-2.0-flash")
         r2 = m2.generate_content("Say OK")
         status["apis"]["gemini_study_plan"] = "ok" if r2.text else "degraded"
         
@@ -662,7 +662,7 @@ async def gemini_query(request: QueryRequest):
     )
 
     try:
-        model = genai.GenerativeModel("models/gemini-2.5-flash")
+        model = genai.GenerativeModel("models/gemini-2.0-flash")
         response = model.generate_content(
             prompt,
             generation_config={
@@ -724,7 +724,7 @@ async def gemini_query_stream(request: QueryRequest):
 
     async def generate():
         try:
-            model = genai.GenerativeModel("models/gemini-2.5-flash")
+            model = genai.GenerativeModel("models/gemini-2.0-flash")
             for chunk in model.generate_content(
                 prompt, stream=True,
                 generation_config={
@@ -778,7 +778,7 @@ Example format: Brachial Plexus, Starling Law, Beta Blockers MOA
 No numbering. No explanation. No JSON. Just topic names."""
 
     try:
-        model = genai.GenerativeModel("models/gemini-2.5-flash")
+        model = genai.GenerativeModel("models/gemini-2.0-flash")
         topic_resp = model.generate_content(
             topic_prompt,
             generation_config={

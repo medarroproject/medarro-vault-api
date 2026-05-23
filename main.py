@@ -322,8 +322,8 @@ MODE_TOKENS = {
 def get_model(prefer_fast: bool = False) -> genai.GenerativeModel:
     """Try models in order — use what's available on the API key"""
     models_to_try = [
-        "models/gemini-1.5-flash",      # Fast, widely available
-        "models/gemini-1.5-flash-8b",   # Fastest, very available
+        "models/gemini-2.5-flash",      # Fast, widely available
+        "models/gemini-2.5-flash-8b",   # Fastest, very available
         "models/gemini-1.5-pro",        # Better quality
         "models/gemini-2.0-flash-lite", # New fast
         "models/gemini-2.0-flash",      # New
@@ -331,16 +331,16 @@ def get_model(prefer_fast: bool = False) -> genai.GenerativeModel:
     ]
     if prefer_fast:
         models_to_try = [
-            "models/gemini-1.5-flash-8b",
-            "models/gemini-1.5-flash",
+            "models/gemini-2.5-flash-8b",
+            "models/gemini-2.5-flash",
             "models/gemini-2.0-flash-lite",
             "models/gemini-2.0-flash",
         ]
     # Return first model name (actual availability tested at runtime)
     return models_to_try[0]
 
-PRIMARY_MODEL = os.getenv("GEMINI_MODEL", "models/gemini-1.5-flash")
-FAST_MODEL = os.getenv("GEMINI_FAST_MODEL", "models/gemini-1.5-flash-8b")
+PRIMARY_MODEL = os.getenv("GEMINI_MODEL", "models/gemini-2.5-flash")
+FAST_MODEL = os.getenv("GEMINI_FAST_MODEL", "models/gemini-2.5-flash-8b")
 
 # ---------------------------------------------------------------------------
 # Health Check
@@ -363,7 +363,7 @@ async def health_check():
     }
 
     # Test primary Gemini
-    for model_name in [PRIMARY_MODEL, "models/gemini-1.5-flash", "models/gemini-2.0-flash"]:
+    for model_name in [PRIMARY_MODEL, "models/gemini-2.5-flash", "models/gemini-2.0-flash"]:
         try:
             genai.configure(api_key=GEMINI_API_KEY)
             m = genai.GenerativeModel(model_name)
@@ -376,7 +376,7 @@ async def health_check():
             status["warnings"].append(f"{model_name}: {str(e)[:50]}")
 
     # Test study plan key
-    for model_name in [FAST_MODEL, "models/gemini-1.5-flash-8b", "models/gemini-1.5-flash"]:
+    for model_name in [FAST_MODEL, "models/gemini-2.5-flash-8b", "models/gemini-2.5-flash"]:
         try:
             genai.configure(api_key=GEMINI_STUDY_PLAN_KEY)
             m2 = genai.GenerativeModel(model_name)
@@ -564,7 +564,7 @@ async def gemini_query_stream(request: QueryRequest):
     prompt = build_prompt(request.query, request.mode, request.track)
 
     async def generate():
-        for model_name in [PRIMARY_MODEL, "models/gemini-1.5-flash", "models/gemini-2.0-flash"]:
+        for model_name in [PRIMARY_MODEL, "models/gemini-2.5-flash", "models/gemini-2.0-flash"]:
             try:
                 model = genai.GenerativeModel(model_name)
                 for chunk in model.generate_content(

@@ -387,8 +387,8 @@ async def health_check():
                 break
         except Exception as e:
             status["warnings"].append(f"StudyPlan {model_name}: {str(e)[:50]}")
-    finally:
-        genai.configure(api_key=GEMINI_API_KEY)
+
+    genai.configure(api_key=GEMINI_API_KEY)
 
     try:
         emb = get_embedding("test")

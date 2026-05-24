@@ -240,31 +240,41 @@ MUST KNOW: [#1 fact]
 Q: {query}"""
 
     if mode == "mcq-practice":
-        return f"""Generate 5 MCQs on this topic for {track} exam.
+    return f"""You are a senior {track} examiner.
+Generate 5 university-level MCQs.
 {ctx}
-Format ALL 5 exactly like this:
-Q1. [question]
-A.[opt] B.[opt] C.[opt] D.[opt]
-Ans: [letter]. [why correct, why others wrong]
+Return ONLY this JSON array. No extra text:
 
-Q2. [question]
-A.[opt] B.[opt] C.[opt] D.[opt]
-Ans: [letter]. [explanation]
+[
+  {{
+    "q": "Complete clinical question here",
+    "options": {{
+      "A": "Option text",
+      "B": "Option text", 
+      "C": "Option text",
+      "D": "Option text"
+    }},
+    "correct": "A",
+    "reason_correct": "Why A is correct in 1-2 lines",
+    "reason_wrong": {{
+      "B": "Why B is wrong",
+      "C": "Why C is wrong",
+      "D": "Why D is wrong"
+    }}
+  }}
+]
 
-Q3. [question]
-A.[opt] B.[opt] C.[opt] D.[opt]
-Ans: [letter]. [explanation]
-
-Q4. [question]
-A.[opt] B.[opt] C.[opt] D.[opt]
-Ans: [letter]. [explanation]
-
-Q5. [question]
-A.[opt] B.[opt] C.[opt] D.[opt]
-Ans: [letter]. [explanation]
+RULES:
+- University exam standard (MBBS/NEET PG level)
+- Clinical scenario based questions preferred
+- One best answer type
+- Wrong options must be plausible (not obvious)
+- Reasoning: short, exam-focused, memorable
+- All 5 MCQs required
+- Return ONLY valid JSON array
 
 Topic: {query}
-Make them high-yield, {track} exam standard."""
+Track: {track}"""
 
     if mode == "rapid-recall":
         return f"""Rapid recall for {track} student. Complete all sections.
@@ -307,7 +317,7 @@ MODE_TOKENS = {
     "vault-answer":     900,
     "quick-summary":   1000,
     "rapid-recall":    1500,
-    "mcq-practice":    2000,
+    "mcq-practice":    2500,
     "deep-explanation": 2500,
     "explanation":     2000,
     "exam":            1000,

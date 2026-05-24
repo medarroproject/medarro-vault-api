@@ -315,8 +315,8 @@ Write every section completely. Never stop mid-sentence."""
 # ---------------------------------------------------------------------------
 MODE_TOKENS = {
     "vault-answer":     900,
-    "quick-summary":   1000,
-    "rapid-recall":    1500,
+    "quick-summary":   1800,
+    "rapid-recall":    1800,
     "mcq-practice":    2500,
     "deep-explanation": 2500,
     "explanation":     2000,

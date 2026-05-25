@@ -243,35 +243,24 @@ Q: {query}"""
         return f"""You are a senior {track} examiner.
 Generate 5 university-level MCQs.
 {ctx}
-Return ONLY this JSON array. No extra text:
+if mode == "mcq-practice":
+        return f"""You are a senior {track} examiner.
+Generate exactly 5 university-level MCQs.
+{ctx}
+Topic: {query}
+Track: {track}
 
-[
-  {{
-    "q": "Complete clinical question here",
-    "options": {{
-      "A": "Option text",
-      "B": "Option text", 
-      "C": "Option text",
-      "D": "Option text"
-    }},
-    "correct": "A",
-    "reason_correct": "Why A is correct in 1-2 lines",
-    "reason_wrong": {{
-      "B": "Why B is wrong",
-      "C": "Why C is wrong",
-      "D": "Why D is wrong"
-    }}
-  }}
-]
+Return ONLY valid JSON array. No text before or after.
+Format:
+[{{"q":"Clinical question here","options":{{"A":"option","B":"option","C":"option","D":"option"}},"correct":"A","reason_correct":"Why A is correct in 1-2 lines","reason_wrong":{{"B":"why wrong","C":"why wrong","D":"why wrong"}}}},{{"q":"Q2 here","options":{{"A":"option","B":"option","C":"option","D":"option"}},"correct":"B","reason_correct":"Why B correct","reason_wrong":{{"A":"why wrong","C":"why wrong","D":"why wrong"}}}},{{"q":"Q3 here","options":{{"A":"option","B":"option","C":"option","D":"option"}},"correct":"C","reason_correct":"Why C correct","reason_wrong":{{"A":"why wrong","B":"why wrong","D":"why wrong"}}}},{{"q":"Q4 here","options":{{"A":"option","B":"option","C":"option","D":"option"}},"correct":"A","reason_correct":"Why A correct","reason_wrong":{{"B":"why wrong","C":"why wrong","D":"why wrong"}}}},{{"q":"Q5 here","options":{{"A":"option","B":"option","C":"option","D":"option"}},"correct":"D","reason_correct":"Why D correct","reason_wrong":{{"A":"why wrong","B":"why wrong","C":"why wrong"}}}}]
 
 RULES:
-- University exam standard (MBBS/NEET PG level)
-- Clinical scenario based questions preferred
-- One best answer type
-- Wrong options must be plausible (not obvious)
-- Reasoning: short, exam-focused, memorable
-- All 5 MCQs required
-- Return ONLY valid JSON array
+- Clinical scenario based (patient presents with...)
+- University/PG exam standard
+- One best answer only
+- Wrong options must be plausible
+- Reasoning: concise, exam-focused
+- All 5 MCQs complete"""
 
 Topic: {query}
 Track: {track}"""
@@ -317,7 +306,7 @@ MODE_TOKENS = {
     "vault-answer":     900,
     "quick-summary":   1800,
     "rapid-recall":    1800,
-    "mcq-practice":    2500,
+    "mcq-practice":    3500,
     "deep-explanation": 2500,
     "explanation":     2000,
     "exam":            1000,

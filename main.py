@@ -240,7 +240,7 @@ MUST KNOW: [#1 fact]
 Q: {query}"""
 
     if mode == "mcq-practice":
-    return f"""You are a senior {track} examiner.
+        return f"""You are a senior {track} examiner.
 Generate 5 university-level MCQs.
 {ctx}
 Return ONLY this JSON array. No extra text:

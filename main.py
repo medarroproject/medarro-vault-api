@@ -18,7 +18,7 @@ from fastembed import TextEmbedding
 load_dotenv()
 
 # ---------------------------------------------------------------------------
-# KEYS
+# KEYS & CONFIGURATION
 # ---------------------------------------------------------------------------
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_STUDY_PLAN_KEY = os.getenv("new_gemini_api_key")
@@ -30,15 +30,15 @@ if not GEMINI_STUDY_PLAN_KEY:
 
 try:
     genai.configure(api_key=GEMINI_API_KEY)
-    print("✅ Gemini configured")
+    print("✅ Gemini configured successfully")
 except Exception as e:
-    raise RuntimeError(f"Gemini error: {e}")
+    raise RuntimeError(f"Gemini configuration error: {e}")
 
 try:
     st_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
-    print("✅ FastEmbed loaded")
+    print("✅ FastEmbed engine loaded successfully")
 except Exception as e:
-    raise RuntimeError(f"FastEmbed error: {e}")
+    raise RuntimeError(f"FastEmbed initialization error: {e}")
 
 supabase: Client = create_client(
     os.getenv("SUPABASE_URL"),
@@ -46,9 +46,9 @@ supabase: Client = create_client(
 )
 
 # ---------------------------------------------------------------------------
-# App
+# App Initialization
 # ---------------------------------------------------------------------------
-app = FastAPI(title="Medarro API", version="6.1.1")
+app = FastAPI(title="Medarro API", version="6.1.2")
 
 app.add_middleware(
     CORSMiddleware,
@@ -59,7 +59,7 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
-# Models
+# Pydantic Data Validation Models
 # ---------------------------------------------------------------------------
 class UploadPDFRequest(BaseModel):
     user_id: str
@@ -130,7 +130,7 @@ class StudyPlanResponse(BaseModel):
     total_days_remaining: int
 
 # ---------------------------------------------------------------------------
-# PDF Helpers
+# Core Text Processing Helpers
 # ---------------------------------------------------------------------------
 CHUNK_WORDS = 500
 OVERLAP_WORDS = 100
@@ -145,7 +145,7 @@ def extract_pages(pdf_bytes: bytes) -> List[dict]:
                 pages.append({"page_number": i + 1, "text": text})
         doc.close()
     except Exception as e:
-        print(f"PDF error: {e}")
+        print(f"PDF Extraction processing error: {e}")
         raise
     return pages
 
@@ -173,122 +173,144 @@ def get_embedding(text: str) -> List[float]:
     try:
         return list(st_model.embed([text]))[0].tolist()
     except Exception as e:
-        raise HTTPException(503, f"Embedding error: {e}")
+        raise HTTPException(503, f"Vector Embedding generation failed: {e}")
 
 async def download_pdf(url: str) -> bytes:
     async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as c:
         r = await c.get(url)
         if r.status_code != 200:
-            raise HTTPException(400, f"PDF download failed: {r.status_code}")
+            raise HTTPException(400, f"External PDF sourcing download failed with HTTP status code: {r.status_code}")
         return r.content
 
 def clean_text(text: str) -> str:
-    text = re.sub(r'^#+\s+', '', text, flags=re.MULTILINE)
-    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
-    text = re.sub(r'\*(.+?)\*', r'\1', text)
-    text = re.sub(r'__(.+?)__', r'\1', text)
+    """
+    Cleans system layout spaces without blowing up the core markdown 
+    tags required for structural frontend alignment in components.
+    """
     text = re.sub(r'\n{3,}', '\n\n', text)
     return '\n'.join(l.strip() for l in text.split('\n')).strip()
 
 # ---------------------------------------------------------------------------
-# Medical Data
+# Strict Medical Grounding Constraints
 # ---------------------------------------------------------------------------
 MEDICAL_BOOKS = {
     "NEET": ["NCERT Biology 11&12", "Trueman Biology", "DC Pandey Physics", "OP Tandon Chemistry"],
-    "MBBS": ["Gray's Anatomy", "Guyton Physiology", "Robbins Pathology", "BD Chaurasia", "Harrison's", "KD Tripathi"],
+    "MBBS": ["Gray's Anatomy", "Guyton and Hall Physiology", "Robbins Pathology", "BD Chaurasia Anatomy", "Harrison's Internal Medicine", "KD Tripathi Pharmacology"],
     "BDS": ["Shafer's Oral Pathology", "Gray's Anatomy", "Dental Pharmacology", "Guyton Physiology"],
     "BHMS": ["Boericke Materia Medica", "Organon of Medicine", "Gray's Anatomy", "Guyton Physiology"]
 }
 
-GUIDELINES = "TB:HRZE(H5R10Z25E15mg/kg)2+4mo|DM2:Metformin,HbA1c<7%|HTN:JNC8<140/90|DKA:NS15-20ml+Insulin0.1U/kg|Malaria:Vivax=CQ+Prima,Falci=ACT"
+GUIDELINES = "TB: HRZE (H5 R10 Z25 E15 mg/kg) 2 months intensive + 4 months continuous phase | DM2: First-line Metformin, HbA1c Target < 7% | HTN: JNC8 Protocol Target < 140/90 mmHg | DKA: Initial Normal Saline (15-20 ml/kg/hr) + Continuous Infusion Regular Insulin (0.1 U/kg/hr) | Malaria: P.vivax = Chloroquine + Primaquine for 14 days; P.falciparum = ACT Treatment Regimen."
 
 # ---------------------------------------------------------------------------
-# PROMPTS
+# Strictly Optimized Multi-Mode Prompt Building Block
 # ---------------------------------------------------------------------------
 def build_prompt(query: str, mode: str, track: str, context: str = "") -> str:
-    ctx = f"\nNOTES CONTEXT:\n{context[:600]}\n" if context else ""
+    ctx = f"\n[CRITICAL UNDERLYING VAULT CONTEXT DATA:\n{context[:600]}]\n" if context else ""
     books = ", ".join(MEDICAL_BOOKS.get(track, MEDICAL_BOOKS["MBBS"])[:3])
 
+    # --- VAULT REVISION EXCLUSIVITY MODE ---
     if mode == "vault-answer":
         return (
-            f"You are a {track} topper writing revision notes. Max 250 words."
-            f"{ctx}\n"
-            f"Q: {query}\n\n"
-            "ANSWER:\nKEY POINTS:\n1.\n2.\n3.\n4.\n5.\n"
-            "PEARL:\nMNEMONIC:\nEXAM TIP:\nRECALL:"
+            f"Role: High-ranking academic {track} medical student topper creating high-yield micro revision sheets. Max 200 words. {ctx}\n"
+            f"Topic: {query}\n\n"
+            "Format the output text explicitly matching this layout block configuration below without deviations:\n"
+            "**KEY OBSERVATIONAL DISCOVERIES**:\n- High yield system fact bullet point 1\n- High yield system fact bullet point 2\n"
+            "**CLINICAL CORRELATION PEARL**:\n- 1 sentence critical clinical application insight\n"
+            "**EXAM MEMORY CAPTURE RECALL**:\n- Strict quick concept review pointer"
         )
 
+    # --- QUICK SUMMARY STRICTOR ENGINE ---
     if mode == "quick-summary":
         return (
-            f"You are a {track} expert. Concise revision. Max 180 words."
-            f"{ctx}\n"
-            f"Q: {query}\n\n"
-            "KEY FACTS:\n-\n-\n-\n-\n-\n-\n-\n"
-            "MNEMONIC:\nTREATMENT:\nMUST KNOW:"
+            f"Role: {track} Medical Professor. Build an ultra-dense bulleted execution summary sheet. Do NOT write paragraphs or introductory narratives. Max 150 words. {ctx}\n"
+            f"Target Query: {query}\n\n"
+            "Format the text strictly matching the block template design parameters below:\n"
+            "### ⚡ QUICK SUMMARY ANALYSIS\n"
+            "- **Pathological Core Concept**: [Provide exactly 1 sentence summarizing the primary physiological/clinical mechanism]\n"
+            "- **High-Yield Medical Triggers**: [Provide exactly 3 fast-recall diagnostic markers, criteria, or high-yield points]\n"
+            "- **Management Intervention Standard**: [Provide exactly 1 line detailing the primary therapeutic drug choice or acute emergency management protocol matching standard guidelines]"
         )
 
+    # --- MCQ PRACTICE JSON GENERATION ENGINE ---
     if mode == "mcq-practice":
         return (
-            f"Senior {track} examiner. Generate exactly 5 medical clinical MCQs on: {query}. {ctx}\n"
-            "Return valid JSON array matching this strict type definition structure:\n"
-            '[{"q":"Scenario question text","options":{"A":"Opt A","B":"Opt B","C":"Opt C","D":"Opt D"},"correct":"A","reason_correct":"Why correct","reason_wrong":{"A":"Why wrong","B":"Why wrong","C":"Why wrong","D":"Why wrong"}}]'
+            f"Role: Senior Medical Board {track} Examiner. Create exactly 5 authentic case-based clinical MCQs targeting: {query}. {ctx}\n"
+            "You MUST output a valid, parsable raw JSON array ONLY. Do NOT enclose in markdown tags or add text prefixes/suffixes.\n"
+            "Strict JSON schema array definition:\n"
+            '[\n'
+            '  {\n'
+            '    "q": "Provide a detailed clinical presentation scenario question text.",\n'
+            '    "options": {"A": "Option Alpha text", "B": "Option Beta text", "C": "Option Gamma text", "D": "Option Delta text"},\n'
+            '    "correct": "A",\n'
+            '    "reason_correct": "Provide precise physiological description of why this specific alternative is correct.",\n'
+            '    "reason_wrong": {\n'
+            '      "A": "Short diagnostic breakdown on option A status validation.",\n'
+            '      "B": "Short diagnostic breakdown on option B status validation.",\n'
+            '      "C": "Short diagnostic breakdown on option C status validation.",\n'
+            '      "D": "Short diagnostic breakdown on option D status validation."\n'
+            '    }\n'
+            '  }\n'
+            ']'
         )
 
+    # --- RAPID RECALL FLASHCARD FORMAT ---
     if mode == "rapid-recall":
         return (
-            f"Rapid recall card for {track} student."
-            f"{ctx}\n"
-            f"Topic: {query}\n\n"
-            "DEF:\nCLASSIFICATION/LIST:\n1.\n2.\n3.\n4.\n5.\n"
-            "KEY POINTS:\n-\n-\n-\nMNEMONIC:\n"
-            "FLOW: →→→\nTREATMENT:\nEXAM TIP:\nRECALL:"
+            f"Role: {track} High-Yield Specialization Trainer. Develop a highly structured, rapid active-recall revision flashcard block. Do NOT build massive explanations. Max 200 words. {ctx}\n"
+            f"Target System Concept: {query}\n\n"
+            "Format explicitly as follows:\n"
+            "### 🎴 RAPID RECALL DATA COMPONENT\n"
+            "- **Core Definitional Framework**: [Max 15 words concise summary]\n"
+            "- **Pathognomonic Trait / Diagnostic Checklist**: [Provide up to two highly specific markers/criteria]\n"
+            "- **Structural Flow Hierarchy**: [Concept Step 1] ➔ [Concept Step 2] ➔ [Concept Step 3]\n"
+            "- **Critical Examination Trap / Gold Choice**: [Highlight one high-yield clinical contrast point or drug of choice to prevent negative marking]"
         )
 
+    # --- UNIVERSAL DEEP EXPLANATION (COMPACT COMPREHENSIVE UNIVERSITY BLUEPRINT) ---
     return (
-        f"Medical educator for {track}. Answer completely — never stop mid-sentence.\n"
-        f"Guidelines: {GUIDELINES}\n"
-        f"Refs: {books}"
-        f"{ctx}\n"
-        f"Q: {query}\n\n"
-        "1.DEFINITION:\n"
-        "2.MECHANISM:\n"
-        "3.CLINICAL FEATURES:\n"
-        "4.TREATMENT:\n"
-        "5.PEARLS:\n"
-        "6.REFERENCE:"
+        f"Role: Expert Academic Professor of Medical Education for {track} curriculum students. Formulate concise, yet highly thorough, exam-oriented textbook documentation. Strict limit of 400 words maximum. Never break mid-sentence. {ctx}\n"
+        f"Core Reference Material: {books}. Diagnostic and Treatment Criteria: {GUIDELINES}\n"
+        f"Target Subject Query: {query}\n\n"
+        "Format structurally into these explicit markdown section dividers:\n\n"
+        "### 1. CLINICAL DEFINITION & MOLECULAR PATHOPHYSIOLOGY\n"
+        "[Provide structured definition and precise physiological mechanism cascade steps]\n\n"
+        "### 2. EXAM DIAGNOSTIC CRITERIA & CLINICAL PRESENTATION\n"
+        "[Provide high-density bulleted presentation signs, pathognomonic indicators, and diagnostic rules]\n\n"
+        "### 3. EVIDENCE-BASED PHARMACOLOGICAL & SURGICAL INTERVENTION\n"
+        "[Provide precise, step-by-step guideline-directed clinical management management protocol or pharmacological execution pathways]\n\n"
+        "### 4. MEDICAL TOPPER'S HIGH-YIELD EXAMINATION PEARLS\n"
+        "[Provide one clinical memory mnemonic or highly targeted professional/university examination execution trick]"
     )
 
 MODE_TOKENS = {
-    "vault-answer":      900,
-    "quick-summary":    1000,
-    "rapid-recall":     1500,
+    "vault-answer":      500,
+    "quick-summary":     600,
+    "rapid-recall":      800,
     "mcq-practice":     3500,
-    "deep-explanation": 2500,
-    "explanation":      2000,
+    "deep-explanation": 1200,
+    "explanation":      1200,
     "exam":             1000,
-    "revision":          800,
-    "notes":            2000,
-    "deep-dive":        2500,
+    "revision":          600,
+    "notes":            1200,
+    "deep-dive":        1500,
 }
 
 PRIMARY_MODEL = os.getenv("GEMINI_MODEL", "models/gemini-2.5-flash")
-FAST_MODEL = os.getenv("GEMINI_FAST_MODEL", "models/gemini-2.0-flash")
-
 MODELS_FALLBACK = [
     "models/gemini-2.5-flash",
     "models/gemini-2.0-flash",
     "models/gemini-2.0-flash-lite",
-    "models/gemini-2.5-flash-lite-preview-06-17",
 ]
 
 # ---------------------------------------------------------------------------
-# AI Query
+# Core REST Endpoint Implementations
 # ---------------------------------------------------------------------------
 @app.post("/query", response_model=AiQueryResponse)
 async def gemini_query(request: QueryRequest):
     genai.configure(api_key=GEMINI_API_KEY)
 
-    max_tokens = MODE_TOKENS.get(request.mode, 2000)
+    max_tokens = MODE_TOKENS.get(request.mode, 1500)
     prompt = build_prompt(
         query=request.query,
         mode=request.mode,
@@ -301,9 +323,8 @@ async def gemini_query(request: QueryRequest):
         try:
             model = genai.GenerativeModel(model_name)
             
-            # Formulate structured payload if target mode is MCQ
             gen_config = {
-                "temperature": 0.2 if request.mode == "mcq-practice" else 0.3,
+                "temperature": 0.1 if request.mode == "mcq-practice" else 0.2,
                 "max_output_tokens": max_tokens,
             }
             if request.mode == "mcq-practice":
@@ -315,6 +336,7 @@ async def gemini_query(request: QueryRequest):
 
             answer = response.text if request.mode == "mcq-practice" else clean_text(response.text)
 
+            # Static Citation Engine Parsing
             kws = {
                 "gray": "Gray's Anatomy",
                 "guyton": "Guyton & Hall",
@@ -334,15 +356,15 @@ async def gemini_query(request: QueryRequest):
             return AiQueryResponse(
                 answer=answer,
                 sources=sources,
-                confidence=0.95
+                confidence=0.98 if request.mode == "mcq-practice" else 0.95
             )
 
         except Exception as e:
             last_error = e
-            print(f"Model {model_name} failed: {str(e)[:80]}")
+            print(f"Fallback alerting: Model {model_name} failed execution: {str(e)[:100]}")
             continue
 
-    raise HTTPException(500, f"All models failed: {last_error}")
+    raise HTTPException(500, f"Medarro AI Query Stack internal failure: {last_error}")
 
 @app.post("/search")
 async def gemini_ai_search(request: AiQueryRequest):
@@ -352,12 +374,11 @@ async def gemini_ai_search(request: AiQueryRequest):
         track=request.track
     ))
 
-# Keep remaining routes (/query-stream, /upload-pdf, /search-vault, /generate-study-plan, etc.) as is
 @app.post("/query-stream")
 async def gemini_query_stream(request: QueryRequest):
     genai.configure(api_key=GEMINI_API_KEY)
-    max_tokens = MODE_TOKENS.get(request.mode, 2000)
-    prompt = build_prompt(request.query, request.mode, request.track)
+    max_tokens = MODE_TOKENS.get(request.mode, 1500)
+    prompt = build_prompt(request.query, request.mode, request.track, request.context)
 
     async def generate():
         for model_name in [PRIMARY_MODEL] + MODELS_FALLBACK:
@@ -366,7 +387,7 @@ async def gemini_query_stream(request: QueryRequest):
                 for chunk in model.generate_content(
                     prompt, stream=True,
                     generation_config={
-                        "temperature": 0.3,
+                        "temperature": 0.2,
                         "max_output_tokens": max_tokens
                     }
                 ):
@@ -374,16 +395,15 @@ async def gemini_query_stream(request: QueryRequest):
                         yield chunk.text
                 return
             except Exception as e:
-                print(f"Stream {model_name} failed: {e}")
+                print(f"Streaming error on pipeline model {model_name}: {e}")
                 continue
-        yield "Error: All models unavailable"
+        yield "Error: All production backend nodes failed to route structural streaming generation chunks."
 
     return StreamingResponse(generate(), media_type="text/plain")
 
 @app.get("/health")
 async def health_check():
-    status = {"status": "ok", "service": "Medarro API", "version": "6.1.1", "apis": {"supabase": "ok"}}
-    return status
+    return {"status": "ok", "service": "Medarro API Core Engine", "version": "6.1.2", "apis": {"supabase": "ok"}}
 
 @app.post("/upload-pdf", response_model=UploadPDFResponse)
 async def upload_pdf(request: UploadPDFRequest):
@@ -394,8 +414,11 @@ async def upload_pdf(request: UploadPDFRequest):
     for chunk in chunks:
         emb = get_embedding(chunk["chunk_text"])
         supabase.table("personal_vault").insert({
-            "user_id": request.user_id, "pdf_name": request.pdf_name,
-            "page_number": chunk["page_number"], "chunk_text": chunk["chunk_text"], "embedding": emb
+            "user_id": request.user_id, 
+            "pdf_name": request.pdf_name,
+            "page_number": chunk["page_number"], 
+            "chunk_text": chunk["chunk_text"], 
+            "embedding": emb
         }).execute()
         inserted += 1
     return UploadPDFResponse(status="ready", chunks_count=inserted)
@@ -403,8 +426,19 @@ async def upload_pdf(request: UploadPDFRequest):
 @app.post("/search-vault", response_model=SearchVaultResponse)
 async def search_vault(request: SearchVaultRequest):
     qe = get_embedding(request.query)
-    rpc = supabase.rpc("match_vault_chunks", {"query_embedding": qe, "match_user_id": request.user_id, "match_count": 3}).execute()
-    return SearchVaultResponse(results=[VaultSearchResult(chunk_text=r["chunk_text"], pdf_name=r["pdf_name"], page_number=r["page_number"], similarity=r["similarity"]) for r in rpc.data or []])
+    rpc = supabase.rpc("match_vault_chunks", {
+        "query_embedding": qe, 
+        "match_user_id": request.user_id, 
+        "match_count": 3
+    }).execute()
+    return SearchVaultResponse(results=[
+        VaultSearchResult(
+            chunk_text=r["chunk_text"], 
+            pdf_name=r["pdf_name"], 
+            page_number=r["page_number"], 
+            similarity=r["similarity"]
+        ) for r in rpc.data or []
+    ])
 
 @app.post("/generate-study-plan", response_model=StudyPlanResponse)
 async def generate_study_plan(request: StudyPlanRequest):
@@ -419,14 +453,28 @@ async def generate_study_plan(request: StudyPlanRequest):
     for i in range(7):
         d = date.today() + timedelta(days=i)
         plan.append({
-            "day": d.strftime("%a"), "date": d.strftime("%Y-%m-%d"), "total_hours": float(request.daily_hours),
-            "tasks": [{"subject": subjects[0], "topic": "General Review", "duration_minutes": 60, "mode": "quick-summary", "priority": "high", "time_slot": "09:00 AM"}]
+            "day": d.strftime("%a"), 
+            "date": d.strftime("%Y-%m-%d"), 
+            "total_hours": float(request.daily_hours),
+            "tasks": [{
+                "subject": subjects[0], 
+                "topic": "General Revision Overview", 
+                "duration_minutes": 60, 
+                "mode": "quick-summary", 
+                "priority": "high", 
+                "time_slot": "09:00 AM"
+            }]
         })
-    return StudyPlanResponse(plan=plan, weekly_subject_split={s: 33 for s in subjects}, ai_insight="Keep Pushing!", total_days_remaining=days_remaining)
+    return StudyPlanResponse(
+        plan=plan, 
+        weekly_subject_split={s: 33 for s in subjects}, 
+        ai_insight="Sustained production testing cycle locked. Keep executing.", 
+        total_days_remaining=days_remaining
+    )
 
 @app.get("/tracks")
 async def get_tracks():
-    return {"tracks": ["NEET", "MBBS"], "modes": list(MODE_TOKENS.keys()), "version": "6.1.1"}
+    return {"tracks": ["NEET", "MBBS", "BDS", "BHMS"], "modes": list(MODE_TOKENS.keys()), "version": "6.1.2"}
 
 if __name__ == "__main__":
     import uvicorn

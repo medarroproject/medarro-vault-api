@@ -48,7 +48,7 @@ supabase: Client = create_client(
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
-app = FastAPI(title="Medarro API", version="6.0.0")
+app = FastAPI(title="Medarro API", version="6.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -195,151 +195,112 @@ def clean_text(text: str) -> str:
 # ---------------------------------------------------------------------------
 MEDICAL_BOOKS = {
     "NEET": ["NCERT Biology 11&12", "Trueman Biology", "DC Pandey Physics", "OP Tandon Chemistry"],
-    "MBBS": ["Gray's Anatomy", "Guyton Physiology", "Robbins Pathology", "BD Chaurasia Anatomy", "Harrison's Medicine", "KD Tripathi Pharmacology"],
+    "MBBS": ["Gray's Anatomy", "Guyton Physiology", "Robbins Pathology", "BD Chaurasia", "Harrison's", "KD Tripathi"],
     "BDS": ["Shafer's Oral Pathology", "Gray's Anatomy", "Dental Pharmacology", "Guyton Physiology"],
     "BHMS": ["Boericke Materia Medica", "Organon of Medicine", "Gray's Anatomy", "Guyton Physiology"]
 }
 
-CLINICAL_GUIDELINES = """KEY GUIDELINES:
-TB: WHO 2022 HRZE — H=5mg/kg R=10mg/kg Z=25mg/kg E=15mg/kg (2mo HRZE + 4mo HR)
-DM2: ICMR 2025 Metformin first, HbA1c<7%
-HTN: JNC8 <140/90, <130/80 DM/CKD
-DKA: NS 15-20ml/kg/hr + Insulin 0.1U/kg/hr + K+ if <3.5
-Malaria: Vivax=CQ+Primaquine14d, Falciparum=ACT"""
+GUIDELINES = "TB:HRZE(H5R10Z25E15mg/kg)2+4mo|DM2:Metformin,HbA1c<7%|HTN:JNC8<140/90|DKA:NS15-20ml+Insulin0.1U/kg|Malaria:Vivax=CQ+Prima,Falci=ACT"
 
 # ---------------------------------------------------------------------------
-# SMART PROMPTS — Concise but Complete
-# Key insight: Shorter prompts = faster response + more tokens for answer
+# PROMPTS
+# Token saving strategy:
+# - Remove all example placeholders
+# - Remove verbose instructions
+# - Keep only essential structure
+# - More tokens left = longer complete answers
 # ---------------------------------------------------------------------------
 
 def build_prompt(query: str, mode: str, track: str, context: str = "") -> str:
 
-    ctx = f"\nUSE THIS CONTEXT (from student notes):\n{context[:800]}\n" if context else ""
+    ctx = f"\nNOTES CONTEXT:\n{context[:600]}\n" if context else ""
+    books = ", ".join(MEDICAL_BOOKS.get(track, MEDICAL_BOOKS["MBBS"])[:3])
 
+    # ── VAULT ANSWER ────────────────────────────────────────────────────────
     if mode == "vault-answer":
-        return f"""You are a {track} topper. Answer like revision notes. Max 250 words.
-{ctx}
-FORMAT (all sections required):
-ANSWER: [2 lines direct answer]
-KEY POINTS: 1. 2. 3. 4. 5.
-PEARL: [1 clinical insight]
-MNEMONIC: [if useful]
-EXAM TIP: [how asked in exams]
-RECALL: [1 line summary]
+        return (
+            f"You are a {track} topper writing revision notes. Max 250 words."
+            f"{ctx}\n"
+            f"Q: {query}\n\n"
+            "ANSWER:\nKEY POINTS:\n1.\n2.\n3.\n4.\n5.\n"
+            "PEARL:\nMNEMONIC:\nEXAM TIP:\nRECALL:"
+        )
 
-Q: {query}"""
-
+    # ── QUICK SUMMARY ────────────────────────────────────────────────────────
     if mode == "quick-summary":
-        return f"""You are a {track} expert. Quick revision notes. Max 180 words.
-{ctx}
-KEY FACTS: (7 bullets, max 12 words each)
-MNEMONIC: [one mnemonic]
-TREATMENT: [key drug+dose]
-MUST KNOW: [#1 fact]
+        return (
+            f"You are a {track} expert. Concise revision. Max 180 words."
+            f"{ctx}\n"
+            f"Q: {query}\n\n"
+            "KEY FACTS:\n-\n-\n-\n-\n-\n-\n-\n"
+            "MNEMONIC:\nTREATMENT:\nMUST KNOW:"
+        )
 
-Q: {query}"""
-
+    # ── MCQ PRACTICE ─────────────────────────────────────────────────────────
     if mode == "mcq-practice":
-        return f"""You are a senior {track} examiner.
-Generate 5 university-level MCQs.
-{ctx}
-if mode == "mcq-practice":
-        return f"""You are a senior {track} examiner.
-Generate exactly 5 university-level MCQs.
-{ctx}
-Topic: {query}
-Track: {track}
+        return (
+            f"Senior {track} examiner. Generate 5 clinical MCQs on: {query}"
+            f"{ctx}\n"
+            "Return ONLY JSON array, no other text:\n"
+            '[{"q":"<clinical scenario question>","options":{"A":"<opt>","B":"<opt>","C":"<opt>","D":"<opt>"},"correct":"<letter>","reason_correct":"<1-2 line why correct>","reason_wrong":{"<wrong1>":"<why>","<wrong2>":"<why>","<wrong3>":"<why>"}},{"q":"Q2..."},{"q":"Q3..."},{"q":"Q4..."},{"q":"Q5..."}]\n'
+            f"Track: {track}. University/PG standard. One best answer. Plausible distractors."
+        )
 
-Return ONLY valid JSON array. No text before or after.
-Format:
-[{{"q":"Clinical question here","options":{{"A":"option","B":"option","C":"option","D":"option"}},"correct":"A","reason_correct":"Why A is correct in 1-2 lines","reason_wrong":{{"B":"why wrong","C":"why wrong","D":"why wrong"}}}},{{"q":"Q2 here","options":{{"A":"option","B":"option","C":"option","D":"option"}},"correct":"B","reason_correct":"Why B correct","reason_wrong":{{"A":"why wrong","C":"why wrong","D":"why wrong"}}}},{{"q":"Q3 here","options":{{"A":"option","B":"option","C":"option","D":"option"}},"correct":"C","reason_correct":"Why C correct","reason_wrong":{{"A":"why wrong","B":"why wrong","D":"why wrong"}}}},{{"q":"Q4 here","options":{{"A":"option","B":"option","C":"option","D":"option"}},"correct":"A","reason_correct":"Why A correct","reason_wrong":{{"B":"why wrong","C":"why wrong","D":"why wrong"}}}},{{"q":"Q5 here","options":{{"A":"option","B":"option","C":"option","D":"option"}},"correct":"D","reason_correct":"Why D correct","reason_wrong":{{"A":"why wrong","B":"why wrong","C":"why wrong"}}}}]
-
-RULES:
-- Clinical scenario based (patient presents with...)
-- University/PG exam standard
-- One best answer only
-- Wrong options must be plausible
-- Reasoning: concise, exam-focused
-- All 5 MCQs complete"""
-
-Topic: {query}
-Track: {track}"""
-
+    # ── RAPID RECALL ─────────────────────────────────────────────────────────
     if mode == "rapid-recall":
-        return f"""Rapid recall for {track} student. Complete all sections.
-{ctx}
-DEF: [1 line]
-LIST: 1. 2. 3. 4. 5. (complete list, no truncation)
-KEY: • • • • •
-MNEMONIC: [easy one]
-FLOW: A→B→C→D
-TREATMENT: [drug+dose+duration]
-EXAM: [how it appears in {track} exam]
-RECALL: [#1 thing to remember]
+        return (
+            f"Rapid recall card for {track} student."
+            f"{ctx}\n"
+            f"Topic: {query}\n\n"
+            "DEF:\nCLASSIFICATION/LIST:\n1.\n2.\n3.\n4.\n5.\n"
+            "KEY POINTS:\n-\n-\n-\nMNEMONIC:\n"
+            "FLOW: →→→\nTREATMENT:\nEXAM TIP:\nRECALL:"
+        )
 
-Topic: {query}"""
-
-    # deep-explanation (default)
-    books = MEDICAL_BOOKS.get(track, MEDICAL_BOOKS["MBBS"])
-    books_str = ", ".join(books[:3])
-    return f"""You are a {track} medical educator. Answer completely. Do NOT stop early.
-{CLINICAL_GUIDELINES}
-{ctx}
-Refs: {books_str}
-
-Answer this question with ALL 6 sections:
-1. DEFINITION: [precise 1 line]
-2. MECHANISM: [complete pathophysiology, all steps]
-3. CLINICAL FEATURES: [signs, symptoms, investigations+values]
-4. TREATMENT: [drugs+doses+duration, WHO/ICMR guidelines]
-5. PEARLS: [exam points, differentials, mnemonic]
-6. REFERENCE: [textbook+chapter]
-
-Q: {query}
-
-Write every section completely. Never stop mid-sentence."""
+    # ── DEEP EXPLANATION (default) ───────────────────────────────────────────
+    return (
+        f"Medical educator for {track}. Answer completely — never stop mid-sentence.\n"
+        f"Guidelines: {GUIDELINES}\n"
+        f"Refs: {books}"
+        f"{ctx}\n"
+        f"Q: {query}\n\n"
+        "1.DEFINITION:\n"
+        "2.MECHANISM:\n"
+        "3.CLINICAL FEATURES:\n"
+        "4.TREATMENT:\n"
+        "5.PEARLS:\n"
+        "6.REFERENCE:"
+    )
 
 # ---------------------------------------------------------------------------
-# Token limits — Optimized for speed + completeness
+# Token limits
+# Saving ~200-400 tokens on prompt = ~200-400 more tokens for answer
 # ---------------------------------------------------------------------------
 MODE_TOKENS = {
-    "vault-answer":     900,
-    "quick-summary":   1800,
-    "rapid-recall":    1800,
-    "mcq-practice":    3500,
+    "vault-answer":      900,
+    "quick-summary":    1000,
+    "rapid-recall":     1500,
+    "mcq-practice":     3500,
     "deep-explanation": 2500,
-    "explanation":     2000,
-    "exam":            1000,
-    "revision":         800,
-    "notes":           2000,
-    "deep-dive":       2500,
+    "explanation":      2000,
+    "exam":             1000,
+    "revision":          800,
+    "notes":            2000,
+    "deep-dive":        2500,
 }
 
 # ---------------------------------------------------------------------------
-# Get best available Gemini model
+# Models
 # ---------------------------------------------------------------------------
-def get_model(prefer_fast: bool = False) -> genai.GenerativeModel:
-    """Try models in order — use what's available on the API key"""
-    models_to_try = [
-        "models/gemini-2.5-flash",      # Fast, widely available
-        "models/gemini-2.5-flash-8b",   # Fastest, very available
-        "models/gemini-1.5-pro",        # Better quality
-        "models/gemini-2.0-flash-lite", # New fast
-        "models/gemini-2.0-flash",      # New
-        "models/gemini-2.5-flash",      # Thinking model
-    ]
-    if prefer_fast:
-        models_to_try = [
-            "models/gemini-2.5-flash-8b",
-            "models/gemini-2.5-flash",
-            "models/gemini-2.0-flash-lite",
-            "models/gemini-2.0-flash",
-        ]
-    # Return first model name (actual availability tested at runtime)
-    return models_to_try[0]
-
 PRIMARY_MODEL = os.getenv("GEMINI_MODEL", "models/gemini-2.5-flash")
-FAST_MODEL = os.getenv("GEMINI_FAST_MODEL", "models/gemini-2.5-flash-8b")
+FAST_MODEL = os.getenv("GEMINI_FAST_MODEL", "models/gemini-2.0-flash")
+
+MODELS_FALLBACK = [
+    "models/gemini-2.5-flash",
+    "models/gemini-2.0-flash",
+    "models/gemini-2.0-flash-lite",
+    "models/gemini-2.5-flash-lite-preview-06-17",
+]
 
 # ---------------------------------------------------------------------------
 # Health Check
@@ -349,9 +310,7 @@ async def health_check():
     status = {
         "status": "ok",
         "service": "Medarro API",
-        "version": "6.0.0",
-        "primary_model": PRIMARY_MODEL,
-        "fast_model": FAST_MODEL,
+        "version": "6.1.0",
         "apis": {
             "gemini_query": "checking",
             "gemini_study_plan": "checking",
@@ -361,40 +320,44 @@ async def health_check():
         "warnings": []
     }
 
-    # Test primary Gemini
-    for model_name in [PRIMARY_MODEL, "models/gemini-2.5-flash", "models/gemini-2.0-flash"]:
-        try:
-            genai.configure(api_key=GEMINI_API_KEY)
-            m = genai.GenerativeModel(model_name)
-            r = m.generate_content("Say OK", generation_config={"max_output_tokens": 10})
-            if r.text:
-                status["apis"]["gemini_query"] = f"ok ({model_name})"
-                status["primary_model"] = model_name
-                break
-        except Exception as e:
-            status["warnings"].append(f"{model_name}: {str(e)[:50]}")
+    try:
+        for m in [PRIMARY_MODEL] + MODELS_FALLBACK:
+            try:
+                genai.configure(api_key=GEMINI_API_KEY)
+                r = genai.GenerativeModel(m).generate_content(
+                    "OK", generation_config={"max_output_tokens": 5}
+                )
+                if r.text:
+                    status["apis"]["gemini_query"] = f"ok ({m})"
+                    break
+            except Exception as e:
+                status["warnings"].append(f"{m}: {str(e)[:40]}")
+    except Exception as e:
+        status["apis"]["gemini_query"] = "down"
 
-    # Test study plan key
-    for model_name in [FAST_MODEL, "models/gemini-2.5-flash-8b", "models/gemini-2.5-flash"]:
-        try:
-            genai.configure(api_key=GEMINI_STUDY_PLAN_KEY)
-            m2 = genai.GenerativeModel(model_name)
-            r2 = m2.generate_content("Say OK", generation_config={"max_output_tokens": 10})
-            if r2.text:
-                status["apis"]["gemini_study_plan"] = f"ok ({model_name})"
-                status["fast_model"] = model_name
-                break
-        except Exception as e:
-            status["warnings"].append(f"StudyPlan {model_name}: {str(e)[:50]}")
-
-    genai.configure(api_key=GEMINI_API_KEY)
+    try:
+        for m in [FAST_MODEL] + MODELS_FALLBACK:
+            try:
+                genai.configure(api_key=GEMINI_STUDY_PLAN_KEY)
+                r = genai.GenerativeModel(m).generate_content(
+                    "OK", generation_config={"max_output_tokens": 5}
+                )
+                if r.text:
+                    status["apis"]["gemini_study_plan"] = f"ok ({m})"
+                    break
+            except Exception as e:
+                status["warnings"].append(f"SP {m}: {str(e)[:40]}")
+    except Exception as e:
+        status["apis"]["gemini_study_plan"] = "down"
+    finally:
+        genai.configure(api_key=GEMINI_API_KEY)
 
     try:
         emb = get_embedding("test")
         status["apis"]["embeddings"] = f"ok ({len(emb)} dims)"
     except Exception as e:
         status["apis"]["embeddings"] = "down"
-        status["warnings"].append(f"Embedding: {str(e)[:50]}")
+        status["warnings"].append(f"Emb: {str(e)[:40]}")
 
     return status
 
@@ -495,17 +458,8 @@ async def gemini_query(request: QueryRequest):
         context=request.context
     )
 
-    # Try models in order
-    models_to_try = [
-        PRIMARY_MODEL,
-        "models/gemini-1.5-flash",
-        "models/gemini-1.5-flash-8b",
-        "models/gemini-2.0-flash",
-        "models/gemini-2.5-flash",
-    ]
-
     last_error = None
-    for model_name in models_to_try:
+    for model_name in [PRIMARY_MODEL] + MODELS_FALLBACK:
         try:
             model = genai.GenerativeModel(model_name)
             response = model.generate_content(
@@ -522,11 +476,11 @@ async def gemini_query(request: QueryRequest):
 
             kws = {
                 "gray": "Gray's Anatomy",
-                "guyton": "Guyton & Hall Physiology",
+                "guyton": "Guyton & Hall",
                 "robbins": "Robbins Pathology",
-                "chaurasia": "BD Chaurasia Anatomy",
-                "tripathi": "KD Tripathi Pharmacology",
-                "harrison": "Harrison's Principles",
+                "chaurasia": "BD Chaurasia",
+                "tripathi": "KD Tripathi",
+                "harrison": "Harrison's",
                 "ncert": "NCERT Biology",
                 "who": "WHO Guidelines",
                 "icmr": "ICMR Guidelines",
@@ -536,14 +490,18 @@ async def gemini_query(request: QueryRequest):
                 [v for k, v in kws.items() if k in al]
             )) or ["Standard Medical References"]
 
-            return AiQueryResponse(answer=answer, sources=sources, confidence=0.95)
+            return AiQueryResponse(
+                answer=answer,
+                sources=sources,
+                confidence=0.95
+            )
 
         except Exception as e:
             last_error = e
             print(f"Model {model_name} failed: {str(e)[:80]}")
             continue
 
-    raise HTTPException(500, f"All models failed. Last error: {last_error}")
+    raise HTTPException(500, f"All models failed: {last_error}")
 
 @app.post("/search")
 async def gemini_ai_search(request: AiQueryRequest):
@@ -563,12 +521,15 @@ async def gemini_query_stream(request: QueryRequest):
     prompt = build_prompt(request.query, request.mode, request.track)
 
     async def generate():
-        for model_name in [PRIMARY_MODEL, "models/gemini-2.5-flash", "models/gemini-2.0-flash"]:
+        for model_name in [PRIMARY_MODEL] + MODELS_FALLBACK:
             try:
                 model = genai.GenerativeModel(model_name)
                 for chunk in model.generate_content(
                     prompt, stream=True,
-                    generation_config={"temperature": 0.3, "max_output_tokens": max_tokens}
+                    generation_config={
+                        "temperature": 0.3,
+                        "max_output_tokens": max_tokens
+                    }
                 ):
                     if chunk.text:
                         yield chunk.text
@@ -581,7 +542,7 @@ async def gemini_query_stream(request: QueryRequest):
     return StreamingResponse(generate(), media_type="text/plain")
 
 # ---------------------------------------------------------------------------
-# Study Plan — Smart fallback
+# Study Plan
 # ---------------------------------------------------------------------------
 @app.post("/generate-study-plan", response_model=StudyPlanResponse)
 async def generate_study_plan(request: StudyPlanRequest):
@@ -603,14 +564,14 @@ async def generate_study_plan(request: StudyPlanRequest):
     subjects = subjects_map.get(request.track, subjects_map["MBBS"])
     weak = ", ".join(request.weak_subjects) or "Not specified"
 
-    # Get topics from Gemini
-    topic_prompt = f"""List 14 {request.track} exam topics. Prioritize: {weak}.
-Subjects: {', '.join(subjects)}.
-Return ONLY comma-separated names. No numbering. No explanation.
-Example: Brachial Plexus, Starling Law, Beta Blockers"""
+    topic_prompt = (
+        f"List 14 {request.track} exam topics. Prioritize: {weak}. "
+        f"Subjects: {', '.join(subjects)}. "
+        "Return ONLY comma-separated names. No numbers. No explanation."
+    )
 
     topics = []
-    for model_name in [FAST_MODEL, PRIMARY_MODEL, "models/gemini-1.5-flash-8b", "models/gemini-1.5-flash"]:
+    for model_name in [FAST_MODEL] + MODELS_FALLBACK:
         try:
             genai.configure(api_key=GEMINI_API_KEY)
             model = genai.GenerativeModel(model_name)
@@ -628,7 +589,6 @@ Example: Brachial Plexus, Starling Law, Beta Blockers"""
     if len(topics) < 7:
         topics = [f"{s} Key Concepts" for s in subjects * 3]
 
-    # Build plan in Python
     today_date = date.today()
     day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     modes_cycle = ["deep-explanation", "quick-summary", "mcq-practice", "rapid-recall"]
@@ -671,7 +631,6 @@ Example: Brachial Plexus, Starling Law, Beta Blockers"""
             "tasks": tasks
         })
 
-    # Subject split
     n = len(subjects)
     base = 100 // n
     remainder = 100 - (base * n)
@@ -680,7 +639,6 @@ Example: Brachial Plexus, Starling Law, Beta Blockers"""
         if s in weekly_split:
             weekly_split[s] = min(35, weekly_split[s] + 5)
 
-    # Restore primary key
     genai.configure(api_key=GEMINI_API_KEY)
 
     return StudyPlanResponse(
@@ -689,7 +647,7 @@ Example: Brachial Plexus, Starling Law, Beta Blockers"""
         ai_insight=(
             f"{days_remaining} days left for {request.target_exam}. "
             f"Focus on {weak}. "
-            f"Study {request.daily_hours}h daily to stay on track."
+            f"Study {request.daily_hours}h daily."
         ),
         total_days_remaining=days_remaining
     )
@@ -699,21 +657,13 @@ Example: Brachial Plexus, Starling Law, Beta Blockers"""
 # ---------------------------------------------------------------------------
 @app.get("/health-models")
 async def list_available_models():
-    """Test which models are available on current API key"""
     genai.configure(api_key=GEMINI_API_KEY)
-    models_to_test = [
-        "models/gemini-1.5-flash-8b",
-        "models/gemini-1.5-flash",
-        "models/gemini-1.5-pro",
-        "models/gemini-2.0-flash-lite",
-        "models/gemini-2.0-flash",
-        "models/gemini-2.5-flash",
-    ]
     results = {}
-    for m in models_to_test:
+    for m in MODELS_FALLBACK + ["models/gemini-2.5-flash"]:
         try:
-            model = genai.GenerativeModel(m)
-            r = model.generate_content("Say OK", generation_config={"max_output_tokens": 5})
+            r = genai.GenerativeModel(m).generate_content(
+                "OK", generation_config={"max_output_tokens": 5}
+            )
             results[m] = "✅ available"
         except Exception as e:
             results[m] = f"❌ {str(e)[:60]}"
@@ -724,19 +674,18 @@ async def get_tracks():
     return {
         "tracks": ["NEET", "MBBS", "BHMS", "BDS", "MD/MS"],
         "modes": list(MODE_TOKENS.keys()),
-        "version": "6.0.0"
+        "version": "6.1.0"
     }
 
 @app.get("/status")
 async def api_status():
     return {
-        "version": "6.0.0",
+        "version": "6.1.0",
         "primary_model": PRIMARY_MODEL,
-        "fast_model": FAST_MODEL,
         "model_fallback": "enabled",
-        "smart_prompts": "enabled",
-        "token_optimized": "enabled",
-        "study_plan": "python_generated"
+        "prompt_optimization": "enabled",
+        "token_savings": "~300 tokens saved per prompt",
+        "mcq_fix": "fixed"
     }
 
 if __name__ == "__main__":

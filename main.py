@@ -48,7 +48,7 @@ supabase: Client = create_client(
 # ---------------------------------------------------------------------------
 # App Initialization
 # ---------------------------------------------------------------------------
-app = FastAPI(title="Medarro API", version="6.1.2")
+app = FastAPI(title="Medarro API", version="6.1.3")
 
 app.add_middleware(
     CORSMiddleware,
@@ -184,8 +184,8 @@ async def download_pdf(url: str) -> bytes:
 
 def clean_text(text: str) -> str:
     """
-    Cleans system layout spaces without blowing up the core markdown 
-    tags required for structural frontend alignment in components.
+    Cleans structural system double layout enters but keeps markdown syntax intact
+    for Lovable rich components rendering.
     """
     text = re.sub(r'\n{3,}', '\n\n', text)
     return '\n'.join(l.strip() for l in text.split('\n')).strip()
@@ -203,16 +203,15 @@ MEDICAL_BOOKS = {
 GUIDELINES = "TB: HRZE (H5 R10 Z25 E15 mg/kg) 2 months intensive + 4 months continuous phase | DM2: First-line Metformin, HbA1c Target < 7% | HTN: JNC8 Protocol Target < 140/90 mmHg | DKA: Initial Normal Saline (15-20 ml/kg/hr) + Continuous Infusion Regular Insulin (0.1 U/kg/hr) | Malaria: P.vivax = Chloroquine + Primaquine for 14 days; P.falciparum = ACT Treatment Regimen."
 
 # ---------------------------------------------------------------------------
-# Strictly Optimized Multi-Mode Prompt Building Block
+# Dynamic Prompts Mapping Engine
 # ---------------------------------------------------------------------------
 def build_prompt(query: str, mode: str, track: str, context: str = "") -> str:
     ctx = f"\n[CRITICAL UNDERLYING VAULT CONTEXT DATA:\n{context[:600]}]\n" if context else ""
     books = ", ".join(MEDICAL_BOOKS.get(track, MEDICAL_BOOKS["MBBS"])[:3])
 
-    # --- VAULT REVISION EXCLUSIVITY MODE ---
     if mode == "vault-answer":
         return (
-            f"Role: High-ranking academic {track} medical student topper creating high-yield micro revision sheets. Max 200 words. {ctx}\n"
+            f"Role: High-ranking academic {track} medical student topper creating high-yield micro revision sheets. Max 250 words. {ctx}\n"
             f"Topic: {query}\n\n"
             "Format the output text explicitly matching this layout block configuration below without deviations:\n"
             "**KEY OBSERVATIONAL DISCOVERIES**:\n- High yield system fact bullet point 1\n- High yield system fact bullet point 2\n"
@@ -220,10 +219,9 @@ def build_prompt(query: str, mode: str, track: str, context: str = "") -> str:
             "**EXAM MEMORY CAPTURE RECALL**:\n- Strict quick concept review pointer"
         )
 
-    # --- QUICK SUMMARY STRICTOR ENGINE ---
     if mode == "quick-summary":
         return (
-            f"Role: {track} Medical Professor. Build an ultra-dense bulleted execution summary sheet. Do NOT write paragraphs or introductory narratives. Max 150 words. {ctx}\n"
+            f"Role: {track} Medical Professor. Build an ultra-dense bulleted execution summary sheet. Do NOT write paragraphs or introductory narratives. Max 250 words. {ctx}\n"
             f"Target Query: {query}\n\n"
             "Format the text strictly matching the block template design parameters below:\n"
             "### ⚡ QUICK SUMMARY ANALYSIS\n"
@@ -232,7 +230,6 @@ def build_prompt(query: str, mode: str, track: str, context: str = "") -> str:
             "- **Management Intervention Standard**: [Provide exactly 1 line detailing the primary therapeutic drug choice or acute emergency management protocol matching standard guidelines]"
         )
 
-    # --- MCQ PRACTICE JSON GENERATION ENGINE ---
     if mode == "mcq-practice":
         return (
             f"Role: Senior Medical Board {track} Examiner. Create exactly 5 authentic case-based clinical MCQs targeting: {query}. {ctx}\n"
@@ -254,22 +251,20 @@ def build_prompt(query: str, mode: str, track: str, context: str = "") -> str:
             ']'
         )
 
-    # --- RAPID RECALL FLASHCARD FORMAT ---
     if mode == "rapid-recall":
         return (
-            f"Role: {track} High-Yield Specialization Trainer. Develop a highly structured, rapid active-recall revision flashcard block. Do NOT build massive explanations. Max 200 words. {ctx}\n"
+            f"Role: {track} High-Yield Specialization Trainer. Develop a highly structured, rapid active-recall revision flashcard block. Do NOT build massive explanations. Max 300 words. {ctx}\n"
             f"Target System Concept: {query}\n\n"
             "Format explicitly as follows:\n"
             "### 🎴 RAPID RECALL DATA COMPONENT\n"
-            "- **Core Definitional Framework**: [Max 15 words concise summary]\n"
+            "- **Core Definitional Framework**: [Max 20 words concise summary]\n"
             "- **Pathognomonic Trait / Diagnostic Checklist**: [Provide up to two highly specific markers/criteria]\n"
             "- **Structural Flow Hierarchy**: [Concept Step 1] ➔ [Concept Step 2] ➔ [Concept Step 3]\n"
             "- **Critical Examination Trap / Gold Choice**: [Highlight one high-yield clinical contrast point or drug of choice to prevent negative marking]"
         )
 
-    # --- UNIVERSAL DEEP EXPLANATION (COMPACT COMPREHENSIVE UNIVERSITY BLUEPRINT) ---
     return (
-        f"Role: Expert Academic Professor of Medical Education for {track} curriculum students. Formulate concise, yet highly thorough, exam-oriented textbook documentation. Strict limit of 400 words maximum. Never break mid-sentence. {ctx}\n"
+        f"Role: Expert Academic Professor of Medical Education for {track} curriculum students. Formulate concise, yet highly thorough, exam-oriented textbook documentation. Strict limit of 500 words maximum. Never break mid-sentence. {ctx}\n"
         f"Core Reference Material: {books}. Diagnostic and Treatment Criteria: {GUIDELINES}\n"
         f"Target Subject Query: {query}\n\n"
         "Format structurally into these explicit markdown section dividers:\n\n"
@@ -283,17 +278,18 @@ def build_prompt(query: str, mode: str, track: str, context: str = "") -> str:
         "[Provide one clinical memory mnemonic or highly targeted professional/university examination execution trick]"
     )
 
+# Expanded Token buffer spaces for Lovable rendering
 MODE_TOKENS = {
-    "vault-answer":      500,
-    "quick-summary":     600,
-    "rapid-recall":      800,
-    "mcq-practice":     3500,
-    "deep-explanation": 1200,
-    "explanation":      1200,
-    "exam":             1000,
-    "revision":          600,
-    "notes":            1200,
-    "deep-dive":        1500,
+    "vault-answer":      1200,
+    "quick-summary":     1200,
+    "rapid-recall":      1500,
+    "mcq-practice":      3500,
+    "deep-explanation":  2500,
+    "explanation":       2000,
+    "exam":              1500,
+    "revision":          1000,
+    "notes":             2000,
+    "deep-dive":         2500,
 }
 
 PRIMARY_MODEL = os.getenv("GEMINI_MODEL", "models/gemini-2.5-flash")
@@ -304,13 +300,13 @@ MODELS_FALLBACK = [
 ]
 
 # ---------------------------------------------------------------------------
-# Core REST Endpoint Implementations
+# REST Endpoints
 # ---------------------------------------------------------------------------
 @app.post("/query", response_model=AiQueryResponse)
 async def gemini_query(request: QueryRequest):
     genai.configure(api_key=GEMINI_API_KEY)
 
-    max_tokens = MODE_TOKENS.get(request.mode, 1500)
+    max_tokens = MODE_TOKENS.get(request.mode, 2000)
     prompt = build_prompt(
         query=request.query,
         mode=request.mode,
@@ -324,7 +320,7 @@ async def gemini_query(request: QueryRequest):
             model = genai.GenerativeModel(model_name)
             
             gen_config = {
-                "temperature": 0.1 if request.mode == "mcq-practice" else 0.2,
+                "temperature": 0.15 if request.mode == "mcq-practice" else 0.3,
                 "max_output_tokens": max_tokens,
             }
             if request.mode == "mcq-practice":
@@ -336,7 +332,6 @@ async def gemini_query(request: QueryRequest):
 
             answer = response.text if request.mode == "mcq-practice" else clean_text(response.text)
 
-            # Static Citation Engine Parsing
             kws = {
                 "gray": "Gray's Anatomy",
                 "guyton": "Guyton & Hall",
@@ -356,15 +351,15 @@ async def gemini_query(request: QueryRequest):
             return AiQueryResponse(
                 answer=answer,
                 sources=sources,
-                confidence=0.98 if request.mode == "mcq-practice" else 0.95
+                confidence=0.95
             )
 
         except Exception as e:
             last_error = e
-            print(f"Fallback alerting: Model {model_name} failed execution: {str(e)[:100]}")
+            print(f"Fallback active: Model {model_name} failed: {str(e)[:80]}")
             continue
 
-    raise HTTPException(500, f"Medarro AI Query Stack internal failure: {last_error}")
+    raise HTTPException(500, f"All production endpoints choked: {last_error}")
 
 @app.post("/search")
 async def gemini_ai_search(request: AiQueryRequest):
@@ -377,7 +372,7 @@ async def gemini_ai_search(request: AiQueryRequest):
 @app.post("/query-stream")
 async def gemini_query_stream(request: QueryRequest):
     genai.configure(api_key=GEMINI_API_KEY)
-    max_tokens = MODE_TOKENS.get(request.mode, 1500)
+    max_tokens = MODE_TOKENS.get(request.mode, 2000)
     prompt = build_prompt(request.query, request.mode, request.track, request.context)
 
     async def generate():
@@ -387,7 +382,7 @@ async def gemini_query_stream(request: QueryRequest):
                 for chunk in model.generate_content(
                     prompt, stream=True,
                     generation_config={
-                        "temperature": 0.2,
+                        "temperature": 0.3,
                         "max_output_tokens": max_tokens
                     }
                 ):
@@ -395,15 +390,15 @@ async def gemini_query_stream(request: QueryRequest):
                         yield chunk.text
                 return
             except Exception as e:
-                print(f"Streaming error on pipeline model {model_name}: {e}")
+                print(f"Streaming failed on node {model_name}: {e}")
                 continue
-        yield "Error: All production backend nodes failed to route structural streaming generation chunks."
+        yield "Error: All processing nodes timed out."
 
     return StreamingResponse(generate(), media_type="text/plain")
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "service": "Medarro API Core Engine", "version": "6.1.2", "apis": {"supabase": "ok"}}
+    return {"status": "ok", "service": "Medarro API", "version": "6.1.3", "apis": {"supabase": "ok"}}
 
 @app.post("/upload-pdf", response_model=UploadPDFResponse)
 async def upload_pdf(request: UploadPDFRequest):
@@ -458,7 +453,7 @@ async def generate_study_plan(request: StudyPlanRequest):
             "total_hours": float(request.daily_hours),
             "tasks": [{
                 "subject": subjects[0], 
-                "topic": "General Revision Overview", 
+                "topic": "General Review", 
                 "duration_minutes": 60, 
                 "mode": "quick-summary", 
                 "priority": "high", 
@@ -468,13 +463,13 @@ async def generate_study_plan(request: StudyPlanRequest):
     return StudyPlanResponse(
         plan=plan, 
         weekly_subject_split={s: 33 for s in subjects}, 
-        ai_insight="Sustained production testing cycle locked. Keep executing.", 
+        ai_insight="Keep Pushing!", 
         total_days_remaining=days_remaining
     )
 
 @app.get("/tracks")
 async def get_tracks():
-    return {"tracks": ["NEET", "MBBS", "BDS", "BHMS"], "modes": list(MODE_TOKENS.keys()), "version": "6.1.2"}
+    return {"tracks": ["NEET", "MBBS", "BDS", "BHMS"], "modes": list(MODE_TOKENS.keys()), "version": "6.1.3"}
 
 if __name__ == "__main__":
     import uvicorn

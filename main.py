@@ -59,7 +59,7 @@ supabase: Client = create_client(
 # ---------------------------------------------------------------------------
 # App Initialization
 # ---------------------------------------------------------------------------
-app = FastAPI(title="Medarro API", version="6.2.1")
+app = FastAPI(title="Medarro API", version="6.2.3")
 
 app.add_middleware(
     CORSMiddleware,
@@ -323,33 +323,23 @@ MODE_TOKENS = {
     "deep-dive":         2500,
 }
 
-# --- STRICTOR PLATFORM REPAIR ENGINE ---
-# Yeh core validation filters exact environment variables logic blocks ko guard karega
-def sanitize_model_string(m_name: str) -> str:
-    if not m_name or not isinstance(m_name, str):
-        return "gemini-2.5-flash"
-    
-    cleaned = m_name.strip()
-    # CRITICAL: Agar env variable mein template placeholder value chali gayi hai, block it instantly.
-    if "yourgeminimodelname" in cleaned.lower() or "gemini_model" in cleaned.lower() or not cleaned:
-        return "gemini-2.5-flash"
-        
-    if cleaned.startswith("models/"):
-        cleaned = cleaned.replace("models/", "", 1)
-    
-    cleaned = re.sub(r'[<>\s"\'`]', '', cleaned)
-    
-    # Validation against valid string signatures
-    if cleaned in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"]:
-        return cleaned
-        
-    return "gemini-2.5-flash"
+# --- STRICTOR ENVIRONMENT BASE VARIABLES DEFINITION ---
+def clean_model_name(name: str) -> str:
+    if not name or not isinstance(name, str):
+        return "models/gemini-2.5-flash"
+    cleaned = name.strip()
+    if "yourgeminimodelname" in cleaned.lower() or not cleaned:
+        return "models/gemini-2.5-flash"
+    # Strict fallback wrapper enforcement
+    if not cleaned.startswith("models/"):
+        cleaned = f"models/{cleaned}"
+    return cleaned
 
-PRIMARY_MODEL = sanitize_model_string(os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
+PRIMARY_MODEL = clean_model_name(os.getenv("GEMINI_MODEL", "models/gemini-2.5-flash"))
 MODELS_FALLBACK = [
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
+    "models/gemini-2.5-flash",
+    "models/gemini-2.0-flash",
+    "models/gemini-2.0-flash-lite"
 ]
 
 # ---------------------------------------------------------------------------
@@ -369,27 +359,31 @@ async def gemini_query(request: QueryRequest):
 
     last_error = None
     
-    # HARD-CODED PIPELINE TO SHIELD FROM BROKEN ENVIRONMENT VARIABLES
-    raw_pipeline = [PRIMARY_MODEL] + MODELS_FALLBACK
+    # Combined pipeline execution sequence
+    pipeline = [PRIMARY_MODEL] + MODELS_FALLBACK
     sanitized_pipeline = []
-    for m in raw_pipeline:
-        s = sanitize_model_string(m)
-        if s not in sanitized_pipeline:
-            sanitized_pipeline.append(s)
+    for m in pipeline:
+        c = clean_model_name(m)
+        if c not in sanitized_pipeline:
+            sanitized_pipeline.append(c)
 
     for model_name in sanitized_pipeline:
         try:
             model = genai.GenerativeModel(model_name)
             
+            # FIXED BLOCK: Explicitly injected configuration payload for valid model matching
             gen_config = {
                 "temperature": 0.15 if request.mode == "mcq-practice" else 0.3,
                 "max_output_tokens": max_tokens,
             }
+            if request.mode == "mcq-practice":
+                gen_config["response_mime_type"] = "application/json"
 
             response = model.generate_content(prompt, generation_config=gen_config)
             if not response or not response.text:
                 continue
 
+            # Parser block for raw/markdown wrapped JSON execution
             if request.mode == "mcq-practice":
                 raw = response.text.strip()
                 if raw.startswith("```"):
@@ -430,10 +424,10 @@ async def gemini_query(request: QueryRequest):
             raise he
         except Exception as e:
             last_error = e
-            print(f"Fallback logging trace active: Model {model_name} failed with context: {str(e)[:120]}")
+            print(f"Tracking error on: {model_name} | Trace: {str(e)[:100]}")
             continue
 
-    raise HTTPException(500, f"Medarro AI Core Stack execution total block crash: {last_error}")
+    raise HTTPException(500, f"Medarro AI Execution Engine failure: {last_error}")
 
 @app.post("/search")
 async def gemini_ai_search(request: AiQueryRequest):
@@ -450,12 +444,12 @@ async def gemini_query_stream(request: QueryRequest):
     max_tokens = MODE_TOKENS.get(request.mode, 2000)
     prompt = build_prompt(request.query, request.mode, request.track, request.context)
 
-    raw_pipeline = [PRIMARY_MODEL] + MODELS_FALLBACK
+    pipeline = [PRIMARY_MODEL] + MODELS_FALLBACK
     sanitized_pipeline = []
-    for m in raw_pipeline:
-        s = sanitize_model_string(m)
-        if s not in sanitized_pipeline:
-            sanitized_pipeline.append(s)
+    for m in pipeline:
+        c = clean_model_name(m)
+        if c not in sanitized_pipeline:
+            sanitized_pipeline.append(c)
 
     async def generate():
         stream_success = False
@@ -463,12 +457,16 @@ async def gemini_query_stream(request: QueryRequest):
             try:
                 model = genai.GenerativeModel(model_name)
                 
+                gen_config = {
+                    "temperature": 0.3,
+                    "max_output_tokens": max_tokens
+                }
+                if request.mode == "mcq-practice":
+                    gen_config["response_mime_type"] = "application/json"
+                
                 response_stream = model.generate_content(
                     prompt, stream=True,
-                    generation_config={
-                        "temperature": 0.3,
-                        "max_output_tokens": max_tokens
-                    }
+                    generation_config=gen_config
                 )
                 
                 for chunk in response_stream:
@@ -479,17 +477,17 @@ async def gemini_query_stream(request: QueryRequest):
                 break
                 
             except Exception as e:
-                print(f"Streaming error on pipeline model {model_name}: {e}")
+                print(f"Streaming failed on {model_name}: {e}")
                 continue
         
         if not stream_success:
-            yield f"data: {json.dumps({'error': 'Response generation failed. Please try again.', 'done': True})}\n\n"
+            yield f"data: {json.dumps({'error': 'Response generation failed.', 'done': True})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "service": "Medarro API Core Engine", "version": "6.2.1", "apis": {"supabase": "ok"}}
+    return {"status": "ok", "service": "Medarro API Core Engine", "version": "6.2.3", "apis": {"supabase": "ok"}}
 
 @app.post("/upload-pdf", response_model=UploadPDFResponse)
 async def upload_pdf(request: UploadPDFRequest):
@@ -560,7 +558,7 @@ async def generate_study_plan(request: StudyPlanRequest):
 
 @app.get("/tracks")
 async def get_tracks():
-    return {"tracks": ["NEET", "MBBS", "BDS", "BHMS"], "modes": list(MODE_TOKENS.keys()), "version": "6.2.1"}
+    return {"tracks": ["NEET", "MBBS", "BDS", "BHMS"], "modes": list(MODE_TOKENS.keys()), "version": "6.2.3"}
 
 if __name__ == "__main__":
     import uvicorn

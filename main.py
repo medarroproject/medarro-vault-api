@@ -59,7 +59,7 @@ supabase: Client = create_client(
 # ---------------------------------------------------------------------------
 # App Initialization
 # ---------------------------------------------------------------------------
-app = FastAPI(title="Medarro API", version="6.2.0")
+app = FastAPI(title="Medarro API", version="6.2.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -323,17 +323,27 @@ MODE_TOKENS = {
     "deep-dive":         2500,
 }
 
-# --- UNEXPECTED MODEL NAME FORMAT REPAIR FACTORIZATION ---
-# Raw Model string validation clean-up rules ensure no bad strings pass to SDK
+# --- STRICTOR PLATFORM REPAIR ENGINE ---
+# Yeh core validation filters exact environment variables logic blocks ko guard karega
 def sanitize_model_string(m_name: str) -> str:
-    if not m_name or not isinstance(m_name, str) or m_name.strip() == "":
+    if not m_name or not isinstance(m_name, str):
         return "gemini-2.5-flash"
+    
     cleaned = m_name.strip()
+    # CRITICAL: Agar env variable mein template placeholder value chali gayi hai, block it instantly.
+    if "yourgeminimodelname" in cleaned.lower() or "gemini_model" in cleaned.lower() or not cleaned:
+        return "gemini-2.5-flash"
+        
     if cleaned.startswith("models/"):
         cleaned = cleaned.replace("models/", "", 1)
-    # Remove accidental legacy placeholders or angle brackets like <your Gemini model name>
-    cleaned = re.sub(r'[<>\s]', '', cleaned)
-    return cleaned if cleaned else "gemini-2.5-flash"
+    
+    cleaned = re.sub(r'[<>\s"\'`]', '', cleaned)
+    
+    # Validation against valid string signatures
+    if cleaned in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"]:
+        return cleaned
+        
+    return "gemini-2.5-flash"
 
 PRIMARY_MODEL = sanitize_model_string(os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
 MODELS_FALLBACK = [
@@ -358,11 +368,14 @@ async def gemini_query(request: QueryRequest):
     )
 
     last_error = None
-    # Sanitize dynamic inputs to fully block unexpected formatting
-    model_pipeline = [PRIMARY_MODEL] + MODELS_FALLBACK
-    sanitized_pipeline = [sanitize_model_string(m) for m in model_pipeline]
-    # Remove duplicates while preserving order
-    sanitized_pipeline = list(dict.fromkeys(sanitized_pipeline))
+    
+    # HARD-CODED PIPELINE TO SHIELD FROM BROKEN ENVIRONMENT VARIABLES
+    raw_pipeline = [PRIMARY_MODEL] + MODELS_FALLBACK
+    sanitized_pipeline = []
+    for m in raw_pipeline:
+        s = sanitize_model_string(m)
+        if s not in sanitized_pipeline:
+            sanitized_pipeline.append(s)
 
     for model_name in sanitized_pipeline:
         try:
@@ -417,10 +430,10 @@ async def gemini_query(request: QueryRequest):
             raise he
         except Exception as e:
             last_error = e
-            print(f"Fallback alerting inside non-stream: Model {model_name} failed execution: {str(e)[:150]}")
+            print(f"Fallback logging trace active: Model {model_name} failed with context: {str(e)[:120]}")
             continue
 
-    raise HTTPException(500, f"Medarro AI Query Stack internal failure: {last_error}")
+    raise HTTPException(500, f"Medarro AI Core Stack execution total block crash: {last_error}")
 
 @app.post("/search")
 async def gemini_ai_search(request: AiQueryRequest):
@@ -437,8 +450,12 @@ async def gemini_query_stream(request: QueryRequest):
     max_tokens = MODE_TOKENS.get(request.mode, 2000)
     prompt = build_prompt(request.query, request.mode, request.track, request.context)
 
-    model_pipeline = [PRIMARY_MODEL] + MODELS_FALLBACK
-    sanitized_pipeline = list(dict.fromkeys([sanitize_model_string(m) for m in model_pipeline]))
+    raw_pipeline = [PRIMARY_MODEL] + MODELS_FALLBACK
+    sanitized_pipeline = []
+    for m in raw_pipeline:
+        s = sanitize_model_string(m)
+        if s not in sanitized_pipeline:
+            sanitized_pipeline.append(s)
 
     async def generate():
         stream_success = False
@@ -472,7 +489,7 @@ async def gemini_query_stream(request: QueryRequest):
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "service": "Medarro API Core Engine", "version": "6.2.0", "apis": {"supabase": "ok"}}
+    return {"status": "ok", "service": "Medarro API Core Engine", "version": "6.2.1", "apis": {"supabase": "ok"}}
 
 @app.post("/upload-pdf", response_model=UploadPDFResponse)
 async def upload_pdf(request: UploadPDFRequest):
@@ -543,7 +560,7 @@ async def generate_study_plan(request: StudyPlanRequest):
 
 @app.get("/tracks")
 async def get_tracks():
-    return {"tracks": ["NEET", "MBBS", "BDS", "BHMS"], "modes": list(MODE_TOKENS.keys()), "version": "6.2.0"}
+    return {"tracks": ["NEET", "MBBS", "BDS", "BHMS"], "modes": list(MODE_TOKENS.keys()), "version": "6.2.1"}
 
 if __name__ == "__main__":
     import uvicorn

@@ -59,7 +59,7 @@ supabase: Client = create_client(
 # ---------------------------------------------------------------------------
 # App Initialization
 # ---------------------------------------------------------------------------
-app = FastAPI(title="Medarro API", version="6.1.7")
+app = FastAPI(title="Medarro API", version="6.1.8")
 
 app.add_middleware(
     CORSMiddleware,
@@ -362,18 +362,32 @@ async def gemini_query(request: QueryRequest):
             target_model = model_name if model_name.startswith("models/") else f"models/{model_name}"
             model = genai.GenerativeModel(target_model)
             
+            # FIXED: RESPONSE MIME TYPE LINE COMPLETELY REMOVED FROM CONFIGURATION MATRIX
             gen_config = {
                 "temperature": 0.15 if request.mode == "mcq-practice" else 0.3,
                 "max_output_tokens": max_tokens,
             }
-            if request.mode == "mcq-practice":
-                gen_config["response_mime_type"] = "application/json"
 
             response = model.generate_content(prompt, generation_config=gen_config)
             if not response.text:
                 continue
 
-            answer = response.text if request.mode == "mcq-practice" else clean_text(response.text)
+            # FIXED: APPLIED NEW CODE STRUCTURAL SANITATION AND PARSE FENCES REMOVAL
+            if request.mode == "mcq-practice":
+                raw = response.text.strip()
+                # Strip markdown code fences if Gemini wraps JSON in ```json ... ```
+                if raw.startswith("```"):
+                    raw = re.sub(r"^```[a-zA-Z]*\n?", "", raw)
+                    raw = re.sub(r"\n?```$", "", raw)
+                    raw = raw.strip()
+                # Validate JSON parseable — fail fast with clear error
+                try:
+                    json.loads(raw)
+                except json.JSONDecodeError as je:
+                    raise HTTPException(500, f"MCQ JSON parse failed: {je} | Raw: {raw[:200]}")
+                answer = raw
+            else:
+                answer = clean_text(response.text)
 
             # Static Citation Engine Parsing
             kws = {
@@ -398,6 +412,9 @@ async def gemini_query(request: QueryRequest):
                 confidence=0.98 if request.mode == "mcq-practice" else 0.95
             )
 
+        except HTTPException as he:
+            # Re-raise standard functional HTTP errors from within validation matrices
+            raise he
         except Exception as e:
             last_error = e
             print(f"Fallback alerting inside non-stream: Model {model_name} failed execution: {str(e)[:100]}")
@@ -458,7 +475,7 @@ async def gemini_query_stream(request: QueryRequest):
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "service": "Medarro API Core Engine", "version": "6.1.7", "apis": {"supabase": "ok"}}
+    return {"status": "ok", "service": "Medarro API Core Engine", "version": "6.1.8", "apis": {"supabase": "ok"}}
 
 @app.post("/upload-pdf", response_model=UploadPDFResponse)
 async def upload_pdf(request: UploadPDFRequest):
@@ -513,7 +530,7 @@ async def generate_study_plan(request: StudyPlanRequest):
             "total_hours": float(request.daily_hours),
             "tasks": [{
                 "subject": subjects[0], 
-                "topic": "General Revision Overview", 
+                "topic": "General Review Overview", 
                 "duration_minutes": 60, 
                 "mode": "quick-summary", 
                 "priority": "high", 
@@ -529,7 +546,7 @@ async def generate_study_plan(request: StudyPlanRequest):
 
 @app.get("/tracks")
 async def get_tracks():
-    return {"tracks": ["NEET", "MBBS", "BDS", "BHMS"], "modes": list(MODE_TOKENS.keys()), "version": "6.1.7"}
+    return {"tracks": ["NEET", "MBBS", "BDS", "BHMS"], "modes": list(MODE_TOKENS.keys()), "version": "6.1.8"}
 
 if __name__ == "__main__":
     import uvicorn

@@ -59,7 +59,7 @@ supabase: Client = create_client(
 # ---------------------------------------------------------------------------
 # App Initialization
 # ---------------------------------------------------------------------------
-app = FastAPI(title="Medarro API", version="6.1.8")
+app = FastAPI(title="Medarro API", version="6.1.9")
 
 app.add_middleware(
     CORSMiddleware,
@@ -333,11 +333,12 @@ MODE_TOKENS = {
     "deep-dive":         2500,
 }
 
-PRIMARY_MODEL = os.getenv("GEMINI_MODEL", "models/gemini-2.5-flash")
+# FIXED: REMOVED "models/" PREFIX ENTIRELY FROM STRINGS
+PRIMARY_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 MODELS_FALLBACK = [
-    "models/gemini-2.5-flash",
-    "models/gemini-2.0-flash",
-    "models/gemini-2.0-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
 ]
 
 # ---------------------------------------------------------------------------
@@ -358,11 +359,9 @@ async def gemini_query(request: QueryRequest):
     last_error = None
     for model_name in [PRIMARY_MODEL] + MODELS_FALLBACK:
         try:
-            # Code sanitization pattern for safe naming format
-            target_model = model_name if model_name.startswith("models/") else f"models/{model_name}"
-            model = genai.GenerativeModel(target_model)
+            # FIXED: REMOVED HARDCODED PREFIX SANITIZATION BLOCK
+            model = genai.GenerativeModel(model_name)
             
-            # FIXED: RESPONSE MIME TYPE LINE COMPLETELY REMOVED FROM CONFIGURATION MATRIX
             gen_config = {
                 "temperature": 0.15 if request.mode == "mcq-practice" else 0.3,
                 "max_output_tokens": max_tokens,
@@ -372,7 +371,6 @@ async def gemini_query(request: QueryRequest):
             if not response.text:
                 continue
 
-            # FIXED: APPLIED NEW CODE STRUCTURAL SANITATION AND PARSE FENCES REMOVAL
             if request.mode == "mcq-practice":
                 raw = response.text.strip()
                 # Strip markdown code fences if Gemini wraps JSON in ```json ... ```
@@ -413,7 +411,6 @@ async def gemini_query(request: QueryRequest):
             )
 
         except HTTPException as he:
-            # Re-raise standard functional HTTP errors from within validation matrices
             raise he
         except Exception as e:
             last_error = e
@@ -430,7 +427,7 @@ async def gemini_ai_search(request: AiQueryRequest):
         track=request.track
     ))
 
-# --- SERVER SENT EVENTS (SSE) STREAMING ENGINE (FIXED LOOP AND FORMAT PARAMETERS) ---
+# --- SERVER SENT EVENTS (SSE) STREAMING ENGINE ---
 @app.post("/query-stream")
 async def gemini_query_stream(request: QueryRequest):
     genai.configure(api_key=GEMINI_API_KEY)
@@ -442,9 +439,8 @@ async def gemini_query_stream(request: QueryRequest):
         
         for model_name in [PRIMARY_MODEL] + MODELS_FALLBACK:
             try:
-                # Direct strict sanitation to resolve 400 bad format error
-                target_model = model_name if model_name.startswith("models/") else f"models/{model_name}"
-                model = genai.GenerativeModel(target_model)
+                # FIXED: REMOVED PREFIX STRUCTURE FROM STREAMING LOOP
+                model = genai.GenerativeModel(model_name)
                 
                 response_stream = model.generate_content(
                     prompt, stream=True,
@@ -454,20 +450,17 @@ async def gemini_query_stream(request: QueryRequest):
                     }
                 )
                 
-                # Check if generator can stream chunks out successfully
                 for chunk in response_stream:
                     if chunk.text:
                         yield chunk.text
                 
                 stream_success = True
-                break  # Exit loop immediately if the stream succeeds
+                break
                 
             except Exception as e:
                 print(f"Streaming error on pipeline model {model_name}: {e}")
-                # Continue structural iterations through fallbacks instead of crashing out early
                 continue
         
-        # If all fallback systems fail, output clean error tracking event
         if not stream_success:
             yield f"data: {json.dumps({'error': 'Response generation failed. Please try again.', 'done': True})}\n\n"
 
@@ -475,7 +468,7 @@ async def gemini_query_stream(request: QueryRequest):
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "service": "Medarro API Core Engine", "version": "6.1.8", "apis": {"supabase": "ok"}}
+    return {"status": "ok", "service": "Medarro API Core Engine", "version": "6.1.9", "apis": {"supabase": "ok"}}
 
 @app.post("/upload-pdf", response_model=UploadPDFResponse)
 async def upload_pdf(request: UploadPDFRequest):
@@ -530,7 +523,7 @@ async def generate_study_plan(request: StudyPlanRequest):
             "total_hours": float(request.daily_hours),
             "tasks": [{
                 "subject": subjects[0], 
-                "topic": "General Review Overview", 
+                "topic": "General Revision Overview", 
                 "duration_minutes": 60, 
                 "mode": "quick-summary", 
                 "priority": "high", 
@@ -546,7 +539,7 @@ async def generate_study_plan(request: StudyPlanRequest):
 
 @app.get("/tracks")
 async def get_tracks():
-    return {"tracks": ["NEET", "MBBS", "BDS", "BHMS"], "modes": list(MODE_TOKENS.keys()), "version": "6.1.8"}
+    return {"tracks": ["NEET", "MBBS", "BDS", "BHMS"], "modes": list(MODE_TOKENS.keys()), "version": "6.1.9"}
 
 if __name__ == "__main__":
     import uvicorn

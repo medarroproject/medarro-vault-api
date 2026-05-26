@@ -18,17 +18,6 @@ from fastembed import TextEmbedding
 load_dotenv()
 
 # ---------------------------------------------------------------------------
-# GLOBAL ABSOLUTE RULES (FIX 1: TOP-LEVEL DECLARATION)
-# ---------------------------------------------------------------------------
-MEDARRO_BASE_RULES = """STRICT OUTPUT RULES — NEVER VIOLATE THESE:
-- Do NOT start with any greeting or filler. No "Good morning class", "Good day students", "Today we will", "Hello", "Great question" or similar.
-- Start your answer DIRECTLY with the first heading (DEFINITION or DEF or KEY FACTS).
-- No meta-commentary like "Here is a comprehensive answer..." or "I'll explain this..." or "Certainly!"
-- No closing lines like "I hope this helps", "Feel free to ask", or "In summary".
-- No lecturer tone. You are a structured notes generator, not a teacher giving a lecture.
-"""
-
-# ---------------------------------------------------------------------------
 # KEYS & CONFIGURATION
 # ---------------------------------------------------------------------------
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -59,7 +48,7 @@ supabase: Client = create_client(
 # ---------------------------------------------------------------------------
 # App Initialization
 # ---------------------------------------------------------------------------
-app = FastAPI(title="Medarro API", version="6.1.6")
+app = FastAPI(title="Medarro API", version="6.1.5")
 
 app.add_middleware(
     CORSMiddleware,
@@ -214,6 +203,16 @@ MEDICAL_BOOKS = {
 GUIDELINES = "TB: HRZE (H5 R10 Z25 E15 mg/kg) 2 months intensive + 4 months continuous phase | DM2: First-line Metformin, HbA1c Target < 7% | HTN: JNC8 Protocol Target < 140/90 mmHg | DKA: Initial Normal Saline (15-20 ml/kg/hr) + Continuous Infusion Regular Insulin (0.1 U/kg/hr) | Malaria: P.vivax = Chloroquine + Primaquine for 14 days; P.falciparum = ACT Treatment Regimen."
 
 # ---------------------------------------------------------------------------
+# BASE STRICT RULES BLOCK (FIX 1)
+# ---------------------------------------------------------------------------
+MEDARRO_BASE_RULES = """STRICT RULES — NEVER VIOLATE:
+- Do NOT start with greetings like "Good morning class", "Good day students", "Today we will", "Hello students" or any filler sentence.
+- Start DIRECTLY with the structured answer.
+- No meta-commentary like "Here is a comprehensive answer..."
+- No closing lines like "I hope this helps" or "Feel free to ask."
+"""
+
+# ---------------------------------------------------------------------------
 # Strictly Optimized Multi-Mode Prompt Building Block
 # ---------------------------------------------------------------------------
 def build_prompt(query: str, mode: str, track: str, context: str = "") -> str:
@@ -222,7 +221,7 @@ def build_prompt(query: str, mode: str, track: str, context: str = "") -> str:
 
     # --- VAULT REVISION EXCLUSIVITY MODE ---
     if mode == "vault-answer":
-        system_prompt = MEDARRO_BASE_RULES + (
+        return MEDARRO_BASE_RULES + (
             f"Role: High-ranking academic {track} medical student topper creating high-yield micro revision sheets. Max 250 words. {ctx}\n"
             f"Topic: {query}\n\n"
             "Format the output text explicitly matching this layout block configuration below without deviations:\n"
@@ -230,11 +229,10 @@ def build_prompt(query: str, mode: str, track: str, context: str = "") -> str:
             "**CLINICAL CORRELATION PEARL**:\n- 1 sentence critical clinical application insight\n"
             "**EXAM MEMORY CAPTURE RECALL**:\n- Strict quick concept review pointer"
         )
-        return system_prompt
 
-    # --- QUICK SUMMARY STRICTOR ENGINE ---
+    # --- QUICK SUMMARY STRICTOR ENGINE (FIX 2) ---
     if mode == "quick-summary":
-        system_prompt = MEDARRO_BASE_RULES + (
+        return MEDARRO_BASE_RULES + (
             f"Target Context Query: {query}. Base Reference Core: {books}. {ctx}\n"
             "You are an MBBS exam expert. Answer in EXACTLY this format:\n\n"
             "**KEY FACTS:**\n"
@@ -250,11 +248,10 @@ def build_prompt(query: str, mode: str, track: str, context: str = "") -> str:
             "- No introductory sentences.\n"
             "- If answer feels incomplete at 200 words, prioritize HIGH-YIELD points only."
         )
-        return system_prompt
 
     # --- MCQ PRACTICE JSON GENERATION ENGINE ---
     if mode == "mcq-practice":
-        system_prompt = MEDARRO_BASE_RULES + (
+        return MEDARRO_BASE_RULES + (
             f"Role: Senior Medical Board {track} Examiner. Create exactly 5 authentic case-based clinical MCQs targeting: {query}. {ctx}\n"
             "You MUST output a valid, parsable raw JSON array ONLY. Do NOT enclose in markdown tags or add text prefixes/suffixes.\n"
             "Strict JSON schema array definition:\n"
@@ -273,11 +270,10 @@ def build_prompt(query: str, mode: str, track: str, context: str = "") -> str:
             '  }\n'
             ']'
         )
-        return system_prompt
 
-    # --- RAPID RECALL FLASHCARD FORMAT ---
+    # --- RAPID RECALL FLASHCARD FORMAT (FIX 5) ---
     if mode == "rapid-recall":
-        system_prompt = MEDARRO_BASE_RULES + (
+        return MEDARRO_BASE_RULES + (
             f"Target System Concept: {query}. Track context: {track}. {ctx}\n"
             "You are an MBBS exam topper. Answer in EXACTLY this format:\n\n"
             "**DEF:** (1 line max)\n"
@@ -291,11 +287,10 @@ def build_prompt(query: str, mode: str, track: str, context: str = "") -> str:
             "- No introductory sentences\n"
             "- Exam-ready only"
         )
-        return system_prompt
 
-    # --- UNIVERSAL DEEP EXPLANATION ---
-    if mode in ["deep-explanation", "explanation", "deep-dive"]:
-        system_prompt = MEDARRO_BASE_RULES + (
+    # --- UNIVERSAL DEEP EXPLANATION (FIX 4) ---
+    if mode == "deep-explanation" or mode == "explanation" or mode == "deep-dive":
+        return MEDARRO_BASE_RULES + (
             f"Target Subject Query: {query}. Track context: {track}. Reference: {books}. Guidelines: {GUIDELINES}. {ctx}\n"
             "You are an MBBS medical educator. Answer in EXACTLY this structure:\n\n"
             "**DEFINITION**\n"
@@ -314,11 +309,9 @@ def build_prompt(query: str, mode: str, track: str, context: str = "") -> str:
             "- No filler, no repetition\n"
             "- If question has multiple parts, cover ALL parts within word limit"
         )
-        return system_prompt
 
     # Default fallback framework
-    system_prompt = MEDARRO_BASE_RULES + f"Provide a direct high yield medical answer regarding {query} for track {track} matching international clinical references under 300 words."
-    return system_prompt
+    return MEDARRO_BASE_RULES + f"Provide a direct high yield medical answer regarding {query} for track {track} matching international clinical references under 300 words."
 
 MODE_TOKENS = {
     "vault-answer":      1200,
@@ -411,7 +404,7 @@ async def gemini_ai_search(request: AiQueryRequest):
         track=request.track
     ))
 
-# --- SERVER SENT EVENTS (SSE) STREAMING ENGINE ---
+# --- SERVER SENT EVENTS (SSE) STREAMING ENGINE (FIX 3) ---
 @app.post("/query-stream")
 async def gemini_query_stream(request: QueryRequest):
     genai.configure(api_key=GEMINI_API_KEY)
@@ -435,6 +428,7 @@ async def gemini_query_stream(request: QueryRequest):
                 return
             except Exception as e:
                 print(f"Streaming error on pipeline model {model_name}: {e}")
+                # Clean error payload injected matching standard SSE chunk rules
                 yield f"data: {json.dumps({'error': 'Response generation failed. Please try again.', 'done': True})}\n\n"
                 return
         yield f"data: {json.dumps({'error': 'All production backend nodes failed to route.', 'done': True})}\n\n"
@@ -443,7 +437,7 @@ async def gemini_query_stream(request: QueryRequest):
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "service": "Medarro API Core Engine", "version": "6.1.6", "apis": {"supabase": "ok"}}
+    return {"status": "ok", "service": "Medarro API Core Engine", "version": "6.1.5", "apis": {"supabase": "ok"}}
 
 @app.post("/upload-pdf", response_model=UploadPDFResponse)
 async def upload_pdf(request: UploadPDFRequest):
@@ -514,7 +508,7 @@ async def generate_study_plan(request: StudyPlanRequest):
 
 @app.get("/tracks")
 async def get_tracks():
-    return {"tracks": ["NEET", "MBBS", "BDS", "BHMS"], "modes": list(MODE_TOKENS.keys()), "version": "6.1.6"}
+    return {"tracks": ["NEET", "MBBS", "BDS", "BHMS"], "modes": list(MODE_TOKENS.keys()), "version": "6.1.5"}
 
 if __name__ == "__main__":
     import uvicorn

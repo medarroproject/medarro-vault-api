@@ -59,7 +59,7 @@ supabase: Client = create_client(
 # ---------------------------------------------------------------------------
 # App Initialization
 # ---------------------------------------------------------------------------
-app = FastAPI(title="Medarro API", version="6.1.9")
+app = FastAPI(title="Medarro API", version="6.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -194,10 +194,6 @@ async def download_pdf(url: str) -> bytes:
         return r.content
 
 def clean_text(text: str) -> str:
-    """
-    Cleans structural system double layout enters but keeps markdown syntax intact
-    for Lovable rich components rendering.
-    """
     text = re.sub(r'\n{3,}', '\n\n', text)
     return '\n'.join(l.strip() for l in text.split('\n')).strip()
 
@@ -220,7 +216,6 @@ def build_prompt(query: str, mode: str, track: str, context: str = "") -> str:
     ctx = f"\n[CRITICAL UNDERLYING VAULT CONTEXT DATA:\n{context[:600]}]\n" if context else ""
     books = ", ".join(MEDICAL_BOOKS.get(track, MEDICAL_BOOKS["MBBS"])[:3])
 
-    # --- VAULT REVISION EXCLUSIVITY MODE ---
     if mode == "vault-answer":
         system_prompt = MEDARRO_BASE_RULES + (
             f"Role: High-ranking academic {track} medical student topper creating high-yield micro revision sheets. Max 250 words. {ctx}\n"
@@ -232,7 +227,6 @@ def build_prompt(query: str, mode: str, track: str, context: str = "") -> str:
         )
         return system_prompt
 
-    # --- QUICK SUMMARY STRICTOR ENGINE ---
     if mode == "quick-summary":
         system_prompt = MEDARRO_BASE_RULES + (
             f"Target Context Query: {query}. Base Reference Core: {books}. {ctx}\n"
@@ -252,7 +246,6 @@ def build_prompt(query: str, mode: str, track: str, context: str = "") -> str:
         )
         return system_prompt
 
-    # --- MCQ PRACTICE JSON GENERATION ENGINE ---
     if mode == "mcq-practice":
         system_prompt = MEDARRO_BASE_RULES + (
             f"Role: Senior Medical Board {track} Examiner. Create exactly 5 authentic case-based clinical MCQs targeting: {query}. {ctx}\n"
@@ -275,7 +268,6 @@ def build_prompt(query: str, mode: str, track: str, context: str = "") -> str:
         )
         return system_prompt
 
-    # --- RAPID RECALL FLASHCARD FORMAT ---
     if mode == "rapid-recall":
         system_prompt = MEDARRO_BASE_RULES + (
             f"Target System Concept: {query}. Track context: {track}. {ctx}\n"
@@ -293,7 +285,6 @@ def build_prompt(query: str, mode: str, track: str, context: str = "") -> str:
         )
         return system_prompt
 
-    # --- UNIVERSAL DEEP EXPLANATION ---
     if mode in ["deep-explanation", "explanation", "deep-dive"]:
         system_prompt = MEDARRO_BASE_RULES + (
             f"Target Subject Query: {query}. Track context: {track}. Reference: {books}. Guidelines: {GUIDELINES}. {ctx}\n"
@@ -316,7 +307,6 @@ def build_prompt(query: str, mode: str, track: str, context: str = "") -> str:
         )
         return system_prompt
 
-    # Default fallback framework
     system_prompt = MEDARRO_BASE_RULES + f"Provide a direct high yield medical answer regarding {query} for track {track} matching international clinical references under 300 words."
     return system_prompt
 
@@ -333,8 +323,19 @@ MODE_TOKENS = {
     "deep-dive":         2500,
 }
 
-# FIXED: REMOVED "models/" PREFIX ENTIRELY FROM STRINGS
-PRIMARY_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+# --- UNEXPECTED MODEL NAME FORMAT REPAIR FACTORIZATION ---
+# Raw Model string validation clean-up rules ensure no bad strings pass to SDK
+def sanitize_model_string(m_name: str) -> str:
+    if not m_name or not isinstance(m_name, str) or m_name.strip() == "":
+        return "gemini-2.5-flash"
+    cleaned = m_name.strip()
+    if cleaned.startswith("models/"):
+        cleaned = cleaned.replace("models/", "", 1)
+    # Remove accidental legacy placeholders or angle brackets like <your Gemini model name>
+    cleaned = re.sub(r'[<>\s]', '', cleaned)
+    return cleaned if cleaned else "gemini-2.5-flash"
+
+PRIMARY_MODEL = sanitize_model_string(os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
 MODELS_FALLBACK = [
     "gemini-2.5-flash",
     "gemini-2.0-flash",
@@ -357,9 +358,14 @@ async def gemini_query(request: QueryRequest):
     )
 
     last_error = None
-    for model_name in [PRIMARY_MODEL] + MODELS_FALLBACK:
+    # Sanitize dynamic inputs to fully block unexpected formatting
+    model_pipeline = [PRIMARY_MODEL] + MODELS_FALLBACK
+    sanitized_pipeline = [sanitize_model_string(m) for m in model_pipeline]
+    # Remove duplicates while preserving order
+    sanitized_pipeline = list(dict.fromkeys(sanitized_pipeline))
+
+    for model_name in sanitized_pipeline:
         try:
-            # FIXED: REMOVED HARDCODED PREFIX SANITIZATION BLOCK
             model = genai.GenerativeModel(model_name)
             
             gen_config = {
@@ -368,17 +374,15 @@ async def gemini_query(request: QueryRequest):
             }
 
             response = model.generate_content(prompt, generation_config=gen_config)
-            if not response.text:
+            if not response or not response.text:
                 continue
 
             if request.mode == "mcq-practice":
                 raw = response.text.strip()
-                # Strip markdown code fences if Gemini wraps JSON in ```json ... ```
                 if raw.startswith("```"):
                     raw = re.sub(r"^```[a-zA-Z]*\n?", "", raw)
                     raw = re.sub(r"\n?```$", "", raw)
                     raw = raw.strip()
-                # Validate JSON parseable — fail fast with clear error
                 try:
                     json.loads(raw)
                 except json.JSONDecodeError as je:
@@ -387,7 +391,6 @@ async def gemini_query(request: QueryRequest):
             else:
                 answer = clean_text(response.text)
 
-            # Static Citation Engine Parsing
             kws = {
                 "gray": "Gray's Anatomy",
                 "guyton": "Guyton & Hall",
@@ -414,7 +417,7 @@ async def gemini_query(request: QueryRequest):
             raise he
         except Exception as e:
             last_error = e
-            print(f"Fallback alerting inside non-stream: Model {model_name} failed execution: {str(e)[:100]}")
+            print(f"Fallback alerting inside non-stream: Model {model_name} failed execution: {str(e)[:150]}")
             continue
 
     raise HTTPException(500, f"Medarro AI Query Stack internal failure: {last_error}")
@@ -434,12 +437,13 @@ async def gemini_query_stream(request: QueryRequest):
     max_tokens = MODE_TOKENS.get(request.mode, 2000)
     prompt = build_prompt(request.query, request.mode, request.track, request.context)
 
+    model_pipeline = [PRIMARY_MODEL] + MODELS_FALLBACK
+    sanitized_pipeline = list(dict.fromkeys([sanitize_model_string(m) for m in model_pipeline]))
+
     async def generate():
         stream_success = False
-        
-        for model_name in [PRIMARY_MODEL] + MODELS_FALLBACK:
+        for model_name in sanitized_pipeline:
             try:
-                # FIXED: REMOVED PREFIX STRUCTURE FROM STREAMING LOOP
                 model = genai.GenerativeModel(model_name)
                 
                 response_stream = model.generate_content(
@@ -468,7 +472,7 @@ async def gemini_query_stream(request: QueryRequest):
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "service": "Medarro API Core Engine", "version": "6.1.9", "apis": {"supabase": "ok"}}
+    return {"status": "ok", "service": "Medarro API Core Engine", "version": "6.2.0", "apis": {"supabase": "ok"}}
 
 @app.post("/upload-pdf", response_model=UploadPDFResponse)
 async def upload_pdf(request: UploadPDFRequest):
@@ -539,7 +543,7 @@ async def generate_study_plan(request: StudyPlanRequest):
 
 @app.get("/tracks")
 async def get_tracks():
-    return {"tracks": ["NEET", "MBBS", "BDS", "BHMS"], "modes": list(MODE_TOKENS.keys()), "version": "6.1.9"}
+    return {"tracks": ["NEET", "MBBS", "BDS", "BHMS"], "modes": list(MODE_TOKENS.keys()), "version": "6.2.0"}
 
 if __name__ == "__main__":
     import uvicorn

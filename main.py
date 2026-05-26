@@ -59,7 +59,7 @@ supabase: Client = create_client(
 # ---------------------------------------------------------------------------
 # App Initialization
 # ---------------------------------------------------------------------------
-app = FastAPI(title="Medarro API", version="6.2.3")
+app = FastAPI(title="Medarro API", version="6.2.4")
 
 app.add_middleware(
     CORSMiddleware,
@@ -323,14 +323,12 @@ MODE_TOKENS = {
     "deep-dive":         2500,
 }
 
-# --- STRICTOR ENVIRONMENT BASE VARIABLES DEFINITION ---
 def clean_model_name(name: str) -> str:
     if not name or not isinstance(name, str):
         return "models/gemini-2.5-flash"
     cleaned = name.strip()
     if "yourgeminimodelname" in cleaned.lower() or not cleaned:
         return "models/gemini-2.5-flash"
-    # Strict fallback wrapper enforcement
     if not cleaned.startswith("models/"):
         cleaned = f"models/{cleaned}"
     return cleaned
@@ -358,8 +356,6 @@ async def gemini_query(request: QueryRequest):
     )
 
     last_error = None
-    
-    # Combined pipeline execution sequence
     pipeline = [PRIMARY_MODEL] + MODELS_FALLBACK
     sanitized_pipeline = []
     for m in pipeline:
@@ -371,7 +367,6 @@ async def gemini_query(request: QueryRequest):
         try:
             model = genai.GenerativeModel(model_name)
             
-            # FIXED BLOCK: Explicitly injected configuration payload for valid model matching
             gen_config = {
                 "temperature": 0.15 if request.mode == "mcq-practice" else 0.3,
                 "max_output_tokens": max_tokens,
@@ -383,7 +378,6 @@ async def gemini_query(request: QueryRequest):
             if not response or not response.text:
                 continue
 
-            # Parser block for raw/markdown wrapped JSON execution
             if request.mode == "mcq-practice":
                 raw = response.text.strip()
                 if raw.startswith("```"):
@@ -437,7 +431,6 @@ async def gemini_ai_search(request: AiQueryRequest):
         track=request.track
     ))
 
-# --- SERVER SENT EVENTS (SSE) STREAMING ENGINE ---
 @app.post("/query-stream")
 async def gemini_query_stream(request: QueryRequest):
     genai.configure(api_key=GEMINI_API_KEY)
@@ -487,7 +480,7 @@ async def gemini_query_stream(request: QueryRequest):
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "service": "Medarro API Core Engine", "version": "6.2.3", "apis": {"supabase": "ok"}}
+    return {"status": "ok", "service": "Medarro API Core Engine", "version": "6.2.4", "apis": {"supabase": "ok"}}
 
 @app.post("/upload-pdf", response_model=UploadPDFResponse)
 async def upload_pdf(request: UploadPDFRequest):
@@ -524,41 +517,114 @@ async def search_vault(request: SearchVaultRequest):
         ) for r in rpc.data or []
     ])
 
+# --- REPLACED & UPGRADED: GENERATE STUDY PLAN ENDPOINT ---
 @app.post("/generate-study-plan", response_model=StudyPlanResponse)
 async def generate_study_plan(request: StudyPlanRequest):
     try:
         days_remaining = (datetime.strptime(request.target_date, "%Y-%m-%d").date() - date.today()).days
     except Exception:
         days_remaining = 90
-    subjects_map = {"NEET": ["Biology", "Physics", "Chemistry"], "MBBS": ["Anatomy", "Physiology", "Biochemistry"]}
+    subjects_map = {
+        "NEET": ["Biology", "Physics", "Chemistry"],
+        "MBBS": ["Anatomy", "Physiology", "Biochemistry", "Pharmacology", "Pathology", "Microbiology"],
+        "BDS": ["Anatomy", "Physiology", "Biochemistry", "Dental Materials"],
+        "BHMS": ["Organon", "Materia Medica", "Anatomy", "Physiology"],
+    }
     subjects = subjects_map.get(request.track, subjects_map["MBBS"])
+    weak = request.weak_subjects if request.weak_subjects else subjects[:2]
     
+    prompt = f"""You are a medical education expert creating a 7-day study plan.Student Profile:- Exam: {request.target_exam}- Track: {request.track}- Daily study hours: {request.daily_hours}- Days remaining: {days_remaining}- Weak subjects: {', '.join(weak)}- Subjects: {', '.join(subjects)}Create a 7-day study plan. You MUST return ONLY a valid JSON object. No markdown, no explanation, no extra text.JSON format:{{  "plan": [    {{      "day": "Mon",      "date": "2026-05-27",      "total_hours": {request.daily_hours},      "tasks": [        {{          "subject": "Anatomy",          "topic": "Brachial Plexus",          "duration_minutes": 60,          "mode": "deep-explanation",          "priority": "high",          "time_slot": "09:00 AM"        }}      ]    }}  ],  "weekly_subject_split": {{"Anatomy": 35, "Physiology": 30, "Biochemistry": 35}},  "ai_insight": "Focus more on weak areas this week.",  "total_days_remaining": {days_remaining}}}Rules:- Generate exactly 7 days starting from today- Each day must have 3-5 tasks based on daily_hours ({request.daily_hours} hours total)- Prioritize weak subjects: {', '.join(weak)}- Use only these modes: deep-explanation, quick-summary, rapid-recall, mcq-practice- Rotate subjects across the week, dont repeat same subject all 7 days- weekly_subject_split values must add up to 100- ai_insight must be personalized, mention weak subjects by name- Return ONLY the JSON object, nothing else"""
+    
+    genai.configure(api_key=GEMINI_STUDY_PLAN_KEY)
+    
+    for model_name in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"]:
+        try:
+            # Model target validation mapping format
+            target_model = f"models/{model_name}" if not model_name.startswith("models/") else model_name
+            model = genai.GenerativeModel(target_model)
+            response = model.generate_content(
+                prompt,
+                generation_config={
+                    "temperature": 0.3,
+                    "max_output_tokens": 3000,
+                    "response_mime_type": "application/json"
+                }
+            )
+            if not response.text:
+                continue
+            raw = response.text.strip()
+            if raw.startswith("```"):
+                raw = re.sub(r"^```[a-zA-Z]*\n?", "", raw)
+                raw = re.sub(r"\n?```$", "", raw)
+                raw = raw.strip()
+            parsed = json.loads(raw)
+            
+            plan_days = []
+            for i, day in enumerate(parsed.get("plan", [])[:7]):
+                d = date.today() + timedelta(days=i)
+                tasks = []
+                for t in day.get("tasks", []):
+                    tasks.append(StudyTask(
+                        subject=t.get("subject", subjects[0]),
+                        topic=t.get("topic", "General Revision"),
+                        duration_minutes=int(t.get("duration_minutes", 60)),
+                        mode=t.get("mode", "quick-summary"),
+                        priority=t.get("priority", "medium"),
+                        time_slot=t.get("time_slot", "09:00 AM"),
+                    ))
+                plan_days.append(StudyPlanDay(
+                    day=d.strftime("%a"),
+                    date=d.strftime("%Y-%m-%d"),
+                    total_hours=float(request.daily_hours),
+                    tasks=tasks,
+                ))
+            weekly_split = parsed.get("weekly_subject_split", {s: round(100 // len(subjects)) for s in subjects})
+            ai_insight = parsed.get("ai_insight", f"Focus on {', '.join(weak)} this week.")
+            return StudyPlanResponse(
+                plan=plan_days,
+                weekly_subject_split=weekly_split,
+                ai_insight=ai_insight,
+                total_days_remaining=days_remaining,
+            )
+        except json.JSONDecodeError as je:
+            print(f"Study plan JSON parse failed on {model_name}: {je}")
+            continue
+        except Exception as e:
+            print(f"Study plan generation failed on {model_name}: {e}")
+            continue
+            
+    # Fallback backup pipeline execution block
     plan = []
     for i in range(7):
         d = date.today() + timedelta(days=i)
-        plan.append({
-            "day": d.strftime("%a"), 
-            "date": d.strftime("%Y-%m-%d"), 
-            "total_hours": float(request.daily_hours),
-            "tasks": [{
-                "subject": subjects[0], 
-                "topic": "General Revision Overview", 
-                "duration_minutes": 60, 
-                "mode": "quick-summary", 
-                "priority": "high", 
-                "time_slot": "09:00 AM"
-            }]
-        })
+        day_subjects = [subjects[i % len(subjects)], subjects[(i + 1) % len(subjects)]]
+        tasks = []
+        mins_per_task = (request.daily_hours * 60) // len(day_subjects)
+        for j, subj in enumerate(day_subjects):
+            tasks.append(StudyTask(
+                subject=subj,
+                topic=f"{subj} — High Yield Revision",
+                duration_minutes=int(mins_per_task),
+                mode="quick-summary" if j % 2 == 0 else "rapid-recall",
+                priority="high" if subj in weak else "medium",
+                time_slot=f"0{9+j}:00 AM",
+            ))
+        plan.append(StudyPlanDay(
+            day=d.strftime("%a"),
+            date=d.strftime("%Y-%m-%d"),
+            total_hours=float(request.daily_hours),
+            tasks=tasks,
+        ))
     return StudyPlanResponse(
-        plan=plan, 
-        weekly_subject_split={s: 33 for s in subjects}, 
-        ai_insight="Sustained production testing cycle locked. Keep executing.", 
-        total_days_remaining=days_remaining
+        plan=plan,
+        weekly_subject_split={s: round(100 // len(subjects)) for s in subjects},
+        ai_insight=f"Prioritize {', '.join(weak)} this week. Stay consistent!",
+        total_days_remaining=days_remaining,
     )
 
 @app.get("/tracks")
 async def get_tracks():
-    return {"tracks": ["NEET", "MBBS", "BDS", "BHMS"], "modes": list(MODE_TOKENS.keys()), "version": "6.2.3"}
+    return {"tracks": ["NEET", "MBBS", "BDS", "BHMS"], "modes": list(MODE_TOKENS.keys()), "version": "6.2.4"}
 
 if __name__ == "__main__":
     import uvicorn

@@ -18,6 +18,17 @@ from fastembed import TextEmbedding
 load_dotenv()
 
 # ---------------------------------------------------------------------------
+# GLOBAL ABSOLUTE RULES (FIX 1: TOP-LEVEL DECLARATION)
+# ---------------------------------------------------------------------------
+MEDARRO_BASE_RULES = """STRICT OUTPUT RULES — NEVER VIOLATE THESE:
+- Do NOT start with any greeting or filler. No "Good morning class", "Good day students", "Today we will", "Hello", "Great question" or similar.
+- Start your answer DIRECTLY with the first heading (DEFINITION or DEF or KEY FACTS).
+- No meta-commentary like "Here is a comprehensive answer..." or "I'll explain this..." or "Certainly!"
+- No closing lines like "I hope this helps", "Feel free to ask", or "In summary".
+- No lecturer tone. You are a structured notes generator, not a teacher giving a lecture.
+"""
+
+# ---------------------------------------------------------------------------
 # KEYS & CONFIGURATION
 # ---------------------------------------------------------------------------
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -48,7 +59,7 @@ supabase: Client = create_client(
 # ---------------------------------------------------------------------------
 # App Initialization
 # ---------------------------------------------------------------------------
-app = FastAPI(title="Medarro API", version="6.1.4")
+app = FastAPI(title="Medarro API", version="6.1.6")
 
 app.add_middleware(
     CORSMiddleware,
@@ -211,7 +222,7 @@ def build_prompt(query: str, mode: str, track: str, context: str = "") -> str:
 
     # --- VAULT REVISION EXCLUSIVITY MODE ---
     if mode == "vault-answer":
-        return (
+        system_prompt = MEDARRO_BASE_RULES + (
             f"Role: High-ranking academic {track} medical student topper creating high-yield micro revision sheets. Max 250 words. {ctx}\n"
             f"Topic: {query}\n\n"
             "Format the output text explicitly matching this layout block configuration below without deviations:\n"
@@ -219,18 +230,31 @@ def build_prompt(query: str, mode: str, track: str, context: str = "") -> str:
             "**CLINICAL CORRELATION PEARL**:\n- 1 sentence critical clinical application insight\n"
             "**EXAM MEMORY CAPTURE RECALL**:\n- Strict quick concept review pointer"
         )
+        return system_prompt
 
     # --- QUICK SUMMARY STRICTOR ENGINE ---
     if mode == "quick-summary":
-        return (
-            f"Role: {track} Medical Professor. Core Reference Material: {books}.\n"
-            f"Target Query: {query}. {ctx}\n\n"
-            "Answer in max 150 words. Use bullet points only. No introductory sentences. Start directly with KEY FACTS."
+        system_prompt = MEDARRO_BASE_RULES + (
+            f"Target Context Query: {query}. Base Reference Core: {books}. {ctx}\n"
+            "You are an MBBS exam expert. Answer in EXACTLY this format:\n\n"
+            "**KEY FACTS:**\n"
+            "- (5-7 bullet points, each max 15 words)\n"
+            "- Include mechanism, uses, adverse effects if pharmacology\n"
+            "- Include pathogenesis + diagnosis if pathology\n\n"
+            "**QUICK COMPARE TABLE:** (only if question asks for difference)\n"
+            "| Feature | A | B |\n\n"
+            "**EXAM TIP:** (1 line, most commonly asked point)\n\n"
+            "STRICT LIMITS:\n"
+            "- Total answer: MAX 200 words\n"
+            "- No paragraphs. Bullets only.\n"
+            "- No introductory sentences.\n"
+            "- If answer feels incomplete at 200 words, prioritize HIGH-YIELD points only."
         )
+        return system_prompt
 
     # --- MCQ PRACTICE JSON GENERATION ENGINE ---
     if mode == "mcq-practice":
-        return (
+        system_prompt = MEDARRO_BASE_RULES + (
             f"Role: Senior Medical Board {track} Examiner. Create exactly 5 authentic case-based clinical MCQs targeting: {query}. {ctx}\n"
             "You MUST output a valid, parsable raw JSON array ONLY. Do NOT enclose in markdown tags or add text prefixes/suffixes.\n"
             "Strict JSON schema array definition:\n"
@@ -249,20 +273,52 @@ def build_prompt(query: str, mode: str, track: str, context: str = "") -> str:
             '  }\n'
             ']'
         )
+        return system_prompt
 
     # --- RAPID RECALL FLASHCARD FORMAT ---
     if mode == "rapid-recall":
-        return (
-            f"Role: {track} High-Yield Specialization Trainer. Target System Concept: {query}. {ctx}\n\n"
-            "Answer in max 100 words. Format: DEF (1 line), LIST (5-7 bullets), MNEMONIC (if applicable). Ultra-concise. Exam-ready only."
+        system_prompt = MEDARRO_BASE_RULES + (
+            f"Target System Concept: {query}. Track context: {track}. {ctx}\n"
+            "You are an MBBS exam topper. Answer in EXACTLY this format:\n\n"
+            "**DEF:** (1 line max)\n"
+            "**LIST:**\n"
+            "- (6-8 high-yield bullets, max 12 words each)\n"
+            "- Include: definition, classification, key values, mechanism\n"
+            "**MNEMONIC:** (1 memorable mnemonic if applicable, else skip)\n\n"
+            "STRICT LIMITS:\n"
+            "- Total: MAX 120 words\n"
+            "- No paragraphs\n"
+            "- No introductory sentences\n"
+            "- Exam-ready only"
         )
+        return system_prompt
 
-    # --- UNIVERSAL DEEP EXPLANATION (COMPACT COMPREHENSIVE UNIVERSITY BLUEPRINT) ---
-    return (
-        f"Role: Expert Academic Professor of Medical Education for {track} curriculum students. Core Reference Material: {books}. Diagnostic and Treatment Criteria: {GUIDELINES}\n"
-        f"Target Subject Query: {query}. {ctx}\n\n"
-        "Answer in EXACTLY this structure: DEFINITION (2-3 lines), MECHANISM (clear numbered steps, max 250 words), CLINICAL RELEVANCE (3-4 bullet points), KEY FACTS BOX (5 points). Total: under 500 words. No repetition. No filler sentences."
-    )
+    # --- UNIVERSAL DEEP EXPLANATION ---
+    if mode in ["deep-explanation", "explanation", "deep-dive"]:
+        system_prompt = MEDARRO_BASE_RULES + (
+            f"Target Subject Query: {query}. Track context: {track}. Reference: {books}. Guidelines: {GUIDELINES}. {ctx}\n"
+            "You are an MBBS medical educator. Answer in EXACTLY this structure:\n\n"
+            "**DEFINITION**\n"
+            "(2-3 lines only)\n\n"
+            "**MECHANISM**\n"
+            "(Numbered steps, max 8 steps, each step max 20 words. Include CICR/key concepts inline.)\n\n"
+            "**Differences / Comparison** (only if question asks)\n"
+            "(Max 4 bullet points comparing two things)\n\n"
+            "**CLINICAL RELEVANCE**\n"
+            "- (4 bullet points: disease, pharmacology link, complication, clinical sign)\n\n"
+            "**KEY FACTS BOX**\n"
+            "- (Exactly 5 bullet points, exam-ready, high-yield only)\n\n"
+            "STRICT LIMITS:\n"
+            "- Total answer: MAX 450 words\n"
+            "- No paragraphs in MECHANISM — numbered steps only\n"
+            "- No filler, no repetition\n"
+            "- If question has multiple parts, cover ALL parts within word limit"
+        )
+        return system_prompt
+
+    # Default fallback framework
+    system_prompt = MEDARRO_BASE_RULES + f"Provide a direct high yield medical answer regarding {query} for track {track} matching international clinical references under 300 words."
+    return system_prompt
 
 MODE_TOKENS = {
     "vault-answer":      1200,
@@ -355,6 +411,7 @@ async def gemini_ai_search(request: AiQueryRequest):
         track=request.track
     ))
 
+# --- SERVER SENT EVENTS (SSE) STREAMING ENGINE ---
 @app.post("/query-stream")
 async def gemini_query_stream(request: QueryRequest):
     genai.configure(api_key=GEMINI_API_KEY)
@@ -365,26 +422,28 @@ async def gemini_query_stream(request: QueryRequest):
         for model_name in [PRIMARY_MODEL] + MODELS_FALLBACK:
             try:
                 model = genai.GenerativeModel(model_name)
-                for chunk in model.generate_content(
+                response_stream = model.generate_content(
                     prompt, stream=True,
                     generation_config={
                         "temperature": 0.3,
                         "max_output_tokens": max_tokens
                     }
-                ):
+                )
+                for chunk in response_stream:
                     if chunk.text:
                         yield chunk.text
                 return
             except Exception as e:
                 print(f"Streaming error on pipeline model {model_name}: {e}")
-                continue
-        yield "Error: All production backend nodes failed to route structural streaming generation chunks."
+                yield f"data: {json.dumps({'error': 'Response generation failed. Please try again.', 'done': True})}\n\n"
+                return
+        yield f"data: {json.dumps({'error': 'All production backend nodes failed to route.', 'done': True})}\n\n"
 
-    return StreamingResponse(generate(), media_type="text/plain")
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "service": "Medarro API Core Engine", "version": "6.1.4", "apis": {"supabase": "ok"}}
+    return {"status": "ok", "service": "Medarro API Core Engine", "version": "6.1.6", "apis": {"supabase": "ok"}}
 
 @app.post("/upload-pdf", response_model=UploadPDFResponse)
 async def upload_pdf(request: UploadPDFRequest):
@@ -455,7 +514,7 @@ async def generate_study_plan(request: StudyPlanRequest):
 
 @app.get("/tracks")
 async def get_tracks():
-    return {"tracks": ["NEET", "MBBS", "BDS", "BHMS"], "modes": list(MODE_TOKENS.keys()), "version": "6.1.4"}
+    return {"tracks": ["NEET", "MBBS", "BDS", "BHMS"], "modes": list(MODE_TOKENS.keys()), "version": "6.1.6"}
 
 if __name__ == "__main__":
     import uvicorn

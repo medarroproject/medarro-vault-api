@@ -9,7 +9,7 @@ from datetime import datetime, date, timedelta, timezone
 import fitz
 import httpx
 import google.generativeai as genai
-from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi import FastAPI, HTTPException,  Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -378,6 +378,43 @@ async def health_check():
         "version": "7.0.0",
         "reranker": RERANKER_AVAILABLE,
     }
+
+
+@app.get("/usage")
+async def get_usage(request: Request):
+    auth_header = request.headers.get("Authorization", "")
+    token = auth_header.replace("Bearer ", "").strip()
+
+    if not token:
+        return {"queries_used": 0, "queries_limit": 5, "plan": "free"}
+
+    try:
+        user_resp = supabase.auth.get_user(token)
+        user_id = user_resp.user.id if user_resp.user else None
+    except Exception:
+        user_id = None
+
+    if not user_id:
+        return {"queries_used": 0, "queries_limit": 5, "plan": "free"}
+
+    try:
+        profile = supabase.table("user_profiles") \
+            .select("plan_type, ai_queries_used, last_query_date") \
+            .eq("user_id", user_id) \
+            .maybeSingle() \
+            .execute()
+
+        data = profile.data or {}
+        plan = data.get("plan_type", "free")
+        used = data.get("ai_queries_used", 0) or 0
+
+        limit_map = {"free": 5, "pro": 100, "premium": 999, "beta": 999}
+        limit = limit_map.get(plan, 5)
+
+        return {"queries_used": used, "queries_limit": limit, "plan": plan}
+    except Exception as e:
+        print(f"/usage error: {e}")
+        return {"queries_used": 0, "queries_limit": 5, "plan": "free"}
 
 
 @app.get("/tracks")

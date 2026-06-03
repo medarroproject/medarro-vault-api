@@ -74,7 +74,7 @@ async def check_and_consume_quota(user_id: str, supabase: Client) -> dict:
     """
     # Fetch profile
     try:
-        profile_resp = supabase.table("user_profiles").select("*").eq("id", user_id).single().execute()
+        profile_resp = supabase.table("user_profiles").select("*").eq("user_id", user_id).single().execute()
         profile = profile_resp.data
     except Exception:
         raise HTTPException(status_code=403, detail="User profile not found. Please re-login.")

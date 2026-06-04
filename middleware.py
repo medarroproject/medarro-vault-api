@@ -79,7 +79,7 @@ async def check_and_consume_quota(user_id: str, supabase: Client) -> dict:
     except Exception:
         raise HTTPException(status_code=403, detail="User profile not found. Please re-login.")
 
-    plan: str = profile["plan"]
+    plan: str = profile.get("plan_type", "free")
     now_utc = datetime.now(timezone.utc)
 
     # --- Trial expiry auto-downgrade ---

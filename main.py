@@ -379,7 +379,6 @@ async def health_check():
         "reranker": RERANKER_AVAILABLE,
     }
 
-
 @app.get("/usage")
 async def get_usage(request: Request):
     auth_header = request.headers.get("Authorization", "")
@@ -401,10 +400,10 @@ async def get_usage(request: Request):
         profile = supabase.table("user_profiles") \
             .select("plan_type, ai_queries_used, last_query_date") \
             .eq("user_id", user_id) \
-            .maybeSingle() \
+            .limit(1) \
             .execute()
 
-        data = profile.data or {}
+        data = (profile.data or [{}])[0]
         plan = data.get("plan_type", "free")
         used = data.get("ai_queries_used", 0) or 0
 
@@ -415,7 +414,6 @@ async def get_usage(request: Request):
     except Exception as e:
         print(f"/usage error: {e}")
         return {"queries_used": 0, "queries_limit": 5, "plan": "free"}
-
 
 @app.get("/tracks")
 async def get_tracks():

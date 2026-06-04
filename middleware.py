@@ -60,11 +60,12 @@ def check_rate_limit(user_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 QUOTA_CONFIG = {
-    "premium": {"daily": 70, "is_total": False},
-    "trial":   {"daily": 30, "is_total": True},
-    "free":    {"daily": 5,  "is_total": False},
+    "free":    {"daily": 5,   "is_total": False},
+    "trial":   {"daily": 30,  "is_total": True},
+    "premium": {"daily": 70,  "is_total": False},
+    "pro":     {"daily": 100, "is_total": False},
+    "beta":    {"daily": 999, "is_total": False},
 }
-
 
 async def check_and_consume_quota(user_id: str, supabase: Client) -> dict:
     """
@@ -74,63 +75,103 @@ async def check_and_consume_quota(user_id: str, supabase: Client) -> dict:
     """
     # Fetch profile
     try:
-        profile_resp = supabase.table("user_profiles").select("*").eq("user_id", user_id).single().execute()
+        profile_resp = (
+            supabase.table("user_profiles")
+            .select("*")
+            .eq("user_id", user_id)
+            .single()
+            .execute()
+        )
         profile = profile_resp.data
     except Exception:
-        raise HTTPException(status_code=403, detail="User profile not found. Please re-login.")
+        raise HTTPException(
+            status_code=403,
+            detail="User profile not found. Please re-login."
+        )
 
     plan: str = profile.get("plan_type", "free")
     now_utc = datetime.now(timezone.utc)
 
     # --- Trial expiry auto-downgrade ---
     if plan == "trial":
-        trial_ends = datetime.fromisoformat(profile["trial_ends_at"].replace("Z", "+00:00"))
-        if now_utc > trial_ends:
-            # Auto-downgrade to free
-            supabase.table("user_profiles").update({"plan": "free"}).eq("id", user_id).execute()
+        trial_ends_raw = profile.get("trial_ends_at")
+        if not trial_ends_raw:
             plan = "free"
         else:
-            # Check total trial queries
-            trial_used = profile.get("trial_queries_used", 0)
-            if trial_used >= 30:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Trial query limit (30) reached. Upgrade to Premium for ₹499/month."
-                )
-            # Consume trial quota
-            supabase.table("user_profiles").update(
-                {"trial_queries_used": trial_used + 1, "updated_at": now_utc.isoformat()}
-            ).eq("id", user_id).execute()
-            return {
-                "plan": "trial",
-                "queries_used": trial_used + 1,
-                "queries_limit": 30,
-                "is_trial": True,
-                "trial_ends_at": profile["trial_ends_at"],
-            }
+            trial_ends = datetime.fromisoformat(
+                trial_ends_raw.replace("Z", "+00:00")
+            )
+            if now_utc > trial_ends:
+                # BUG FIX 2+3: plan_type + user_id
+                supabase.table("user_profiles").update(
+                    {"plan_type": "free", "is_trial_active": False}
+                ).eq("user_id", user_id).execute()
+                plan = "free"
+            else:
+                trial_used = profile.get("trial_queries_used", 0) or 0
+                if trial_used >= 30:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Trial query limit (30) reached. Upgrade to Premium for ₹499/month."
+                    )
+                supabase.table("user_profiles").update({
+                    "trial_queries_used": trial_used + 1,
+                    "updated_at": now_utc.isoformat(),
+                }).eq("user_id", user_id).execute()
+                return {
+                    "plan": "trial",
+                    "queries_used": trial_used + 1,
+                    "queries_limit": 30,
+                    "is_trial": True,
+                    "trial_ends_at": trial_ends_raw,
+                }
 
     # --- Premium expiry auto-downgrade ---
     if plan == "premium":
         premium_ends = profile.get("premium_ends_at")
         if premium_ends:
-            premium_ends_dt = datetime.fromisoformat(premium_ends.replace("Z", "+00:00"))
+            premium_ends_dt = datetime.fromisoformat(
+                premium_ends.replace("Z", "+00:00")
+            )
             if now_utc > premium_ends_dt:
-                supabase.table("user_profiles").update({"plan": "free"}).eq("id", user_id).execute()
+                # BUG FIX 2+3
+                supabase.table("user_profiles").update(
+                    {"plan_type": "free"}
+                ).eq("user_id", user_id).execute()
                 plan = "free"
 
-    # --- Daily quota for free and premium ---
+    # --- BUG FIX 1: beta plan bypass daily limit ---
+    if plan == "beta":
+        return {
+            "plan": "beta",
+            "queries_used": 0,
+            "queries_limit": 999,
+            "is_trial": False,
+        }
+
+    # --- Daily quota for free / pro / premium ---
     config = QUOTA_CONFIG.get(plan, QUOTA_CONFIG["free"])
     daily_limit = config["daily"]
     today = date.today().isoformat()
 
     try:
-        usage_resp = supabase.table("daily_usage").select("queries_used").eq("user_id", user_id).eq("usage_date", today).single().execute()
+        usage_resp = (
+            supabase.table("daily_usage")
+            .select("queries_used")
+            .eq("user_id", user_id)
+            .eq("usage_date", today)
+            .single()
+            .execute()
+        )
         current_used = usage_resp.data["queries_used"]
     except Exception:
         current_used = 0
 
     if current_used >= daily_limit:
-        upgrade_msg = " Upgrade to Premium for 70 queries/day." if plan == "free" else ""
+        upgrade_msg = (
+            " Upgrade to Premium for 70 queries/day."
+            if plan == "free" else ""
+        )
         raise HTTPException(
             status_code=403,
             detail=f"Daily query limit ({daily_limit}) reached.{upgrade_msg}"
@@ -138,8 +179,12 @@ async def check_and_consume_quota(user_id: str, supabase: Client) -> dict:
 
     # Upsert daily usage
     supabase.table("daily_usage").upsert(
-        {"user_id": user_id, "usage_date": today, "queries_used": current_used + 1},
-        on_conflict="user_id,usage_date"
+        {
+            "user_id": user_id,
+            "usage_date": today,
+            "queries_used": current_used + 1,
+        },
+        on_conflict="user_id,usage_date",
     ).execute()
 
     return {

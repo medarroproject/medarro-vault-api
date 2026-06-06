@@ -449,7 +449,7 @@ async def auth_register_device(
 @app.get("/me/plan")
 async def get_my_plan(user: dict = Depends(require_auth)) -> UserPlanInfo:
     try:
-        profile_resp = supabase.table("user_profiles").select("*").eq("id", user["id"]).single().execute()
+        profile_resp = supabase.table("user_profiles").select("*").eq("user_id", user["id"]).single().execute()
         profile = profile_resp.data
     except Exception:
         raise HTTPException(404, "User profile not found")

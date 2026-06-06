@@ -120,6 +120,20 @@ GUIDELINES = (
 # ---------------------------------------------------------------------------
 # Prompt versions
 # ---------------------------------------------------------------------------
+@app.post("/test-auth")
+async def test_auth(request: Request):
+    auth_header = request.headers.get("Authorization", "")
+    token = auth_header.replace("Bearer ", "").strip()
+    if not token:
+        return {"error": "no token"}
+    try:
+        user_resp = supabase.auth.get_user(token)
+        return {"user_id": user_resp.user.id, "email": user_resp.user.email}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+
 PROMPT_VERSIONS = {
     "v1": {"temperature_multiplier": 1.0, "max_token_multiplier": 1.0},
     "v2": {"temperature_multiplier": 0.9, "max_token_multiplier": 1.1},

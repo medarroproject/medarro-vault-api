@@ -45,6 +45,8 @@ _rate_limit_store: dict = {}
 
 def check_rate_limit(user_id: str) -> None:
     """Raises 429 if user is calling faster than 1 req/3 seconds."""
+    if user_id == "anonymous":
+        return
     now = time.time()
     last = _rate_limit_store.get(user_id, 0)
     if now - last < 3.0:
@@ -73,6 +75,13 @@ async def check_and_consume_quota(user_id: str, supabase: Client) -> dict:
     Returns plan info dict.
     Raises 403 if quota exceeded or trial expired.
     """
+    if user_id == "anonymous":
+        return {
+            "plan": "free",
+            "queries_used": 0,
+            "queries_limit": 5,
+            "is_trial": False,
+        }
     # Fetch profile
     try:
         profile_resp = (

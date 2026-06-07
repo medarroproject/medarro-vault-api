@@ -513,16 +513,16 @@ async def get_my_plan(user: dict = Depends(require_auth)) -> UserPlanInfo:
 @app.post("/query", response_model=AiQueryResponse)
 async def gemini_query(
     request: QueryRequest,
-    user: dict = Depends(require_auth),
 ):
-    check_rate_limit(user["id"])
-    await check_and_consume_quota(user["id"], supabase)
+    user_id = request.user_id or "anonymous"
+    check_rate_limit(user_id)
+    await check_and_consume_quota(user_id, supabase)
 
     cache_key = make_cache_key(request.query, request.mode, request.track)
     if request.mode != "mcq-practice":
         cached = await get_cached_response(cache_key, supabase)
         if cached:
-            await track_event(user["id"], "query_cache_hit", {"mode": request.mode, "track": request.track}, supabase)
+            await track_event(user_id, "query_cache_hit", {"mode": request.mode, "track": request.track}, supabase)
             return AiQueryResponse(
                 answer=cached,
                 sources=_extract_sources(cached),
@@ -537,7 +537,7 @@ async def gemini_query(
     if request.mode != "mcq-practice":
         await set_cached_response(cache_key, request.query, request.mode, request.track, answer, supabase)
 
-    await track_event(user["id"], "query", {"mode": request.mode, "track": request.track, "query_len": len(request.query)}, supabase)
+    await track_event(user_id, "query", {"mode": request.mode, "track": request.track, "query_len": len(request.query)}, supabase)
 
     return AiQueryResponse(
         answer=answer,
@@ -554,10 +554,10 @@ async def gemini_query(
 @app.post("/query-stream")
 async def gemini_query_stream(
     request: QueryRequest,
-    user: dict = Depends(require_auth),
 ):
-    check_rate_limit(user["id"])
-    await check_and_consume_quota(user["id"], supabase)
+    user_id = request.user_id or "anonymous"
+    check_rate_limit(user_id)
+    await check_and_consume_quota(user_id, supabase)
 
     genai.configure(api_key=GEMINI_API_KEY)
     prompt = build_prompt(request.query, request.mode, request.track, request.context, request.prompt_version)
@@ -582,7 +582,7 @@ async def gemini_query_stream(
 
         yield json.dumps({"error": "Stream generation failed.", "done": True})
 
-    await track_event(user["id"], "query_stream", {"mode": request.mode, "track": request.track}, supabase)
+    await track_event(user_id, "query_stream", {"mode": request.mode, "track": request.track}, supabase)
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 

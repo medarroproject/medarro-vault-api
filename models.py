@@ -39,6 +39,7 @@ class QueryRequest(BaseModel):
     track: str = "NEET"
     context: str = ""
     prompt_version: str = "v3"
+    user_id: Optional[str] = None
 
 
 class AiQueryRequest(BaseModel):
